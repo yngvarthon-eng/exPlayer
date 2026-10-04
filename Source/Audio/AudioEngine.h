@@ -46,6 +46,16 @@ public:
     void setCurrentPosition(double positionSeconds);
     void loadTrack(const juce::File& file);
     void loadXtpSequence(const juce::File& file);
+    void loadVideo(const juce::File& file);
+
+    // Switches which audio track of the currently loaded video plays, reloading
+    // the decode pipeline at the current playback position (and resuming
+    // playback only if it was already playing). trackIndex is the ordinal among
+    // the file's audio streams (matching VideoProbeResult::audioTracks and
+    // ffmpeg's own "-map 0:a:N" addressing), not a raw container stream index.
+    // No-op if no video is currently loaded.
+    void setVideoAudioTrack(int trackIndex);
+    int getSelectedVideoAudioTrack() const { return selectedVideoAudioTrack; }
     void loadStream(const juce::String& url, bool reconnecting = false, int reconnectAttempt = 0);
     bool isPlaying() const;
 
@@ -90,6 +100,20 @@ public:
     Equalizer& getEqualizer() { return equalizer; }
     PluginChain& getPluginChain() { return pluginChain; }
 
+    // MIDI input driving the plugin chain (on-screen keyboard + any enabled
+    // hardware MIDI input device). GUI-thread components (e.g. MidiKeyboardComponent)
+    // bind directly to this state; JUCE's MidiKeyboardState is safe to touch from
+    // both the message thread and the audio thread.
+    juce::MidiKeyboardState& getMidiKeyboardState() { return midiKeyboardState; }
+
+    // Hardware MIDI input selection. Nothing is auto-enabled: a device (e.g. a
+    // keyboard that shows up under more than one driver/port) only feeds the chain
+    // once the user picks it, so we never silently double-deliver notes from a
+    // controller that happens to enumerate more than once.
+    juce::Array<juce::MidiDeviceInfo> getAvailableMidiInputs() const { return juce::MidiInput::getAvailableDevices(); }
+    bool isMidiInputEnabled(const juce::String& identifier) const { return deviceManager->isMidiInputDeviceEnabled(identifier); }
+    void setMidiInputEnabled(const juce::String& identifier, bool enabled);
+
     // Master volume (0.0 = silent, 1.0 = full)
     void  setMasterGain(float gain) { masterGain.store(juce::jlimit(0.0f, 1.0f, gain)); }
     float getMasterGain() const     { return masterGain.load(); }
@@ -129,6 +153,15 @@ private:
     // currentSampleRate to the rate the device actually adopted on success.
     bool updateAudioDevice();
 
+    // Shared body of loadVideo()/setVideoAudioTrack(): probes the file, builds a
+    // fresh FfmpegVideoAudioFormatReader for the requested audio track, and swaps
+    // it in on the message thread, optionally resuming at resumeAtSeconds and/or
+    // autoplaying once ready.
+    void loadVideoInternal(const juce::File& file, int audioTrackIndex,
+                           double resumeAtSeconds, bool autoPlay);
+    juce::File currentVideoFile;
+    int selectedVideoAudioTrack = -1;
+
     PlaylistManager* playlistManager;
 
     std::unique_ptr<juce::AudioFormatManager> formatManager;
@@ -162,6 +195,12 @@ private:
     // Effects chain
     Equalizer  equalizer;
     PluginChain pluginChain;
+
+    // MIDI driving the plugin chain: on-screen keyboard state plus a collector that
+    // merges in any enabled hardware MIDI input devices. Both are designed to be
+    // drained from the audio thread each callback.
+    juce::MidiKeyboardState  midiKeyboardState;
+    juce::MidiMessageCollector midiCollector;
 
     std::atomic<float> masterGain { 1.0f };
 

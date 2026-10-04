@@ -23,6 +23,7 @@ public:
     // MainComponent reference of its own, so "record video via the export
     // dialog" is routed out through this callback instead.
     std::function<void()> onRequestVideoExport;
+    std::function<void()> onRequestPlaylistVideoExport;
 
 private:
     void updatePlayButton();

@@ -1,5 +1,7 @@
 #include "EqualizerComponent.h"
 #include "../Audio/AudioEngine.h"
+#include <cmath>
+#include <limits>
 
 EqualizerComponent::EqualizerComponent(AudioEngine* engine)
     : audioEngine(engine)
@@ -18,6 +20,10 @@ EqualizerComponent::EqualizerComponent(AudioEngine* engine)
     deleteButton->onClick = [this] { onDeletePreset(); };
     addAndMakeVisible(*deleteButton);
 
+    expandButton = std::make_unique<juce::TextButton>("30-Band");
+    expandButton->onClick = [this] { onToggleExpanded(); };
+    addAndMakeVisible(*expandButton);
+
     refreshPresetCombo();
 
     for (int i = 0; i < 10; ++i)
@@ -34,6 +40,39 @@ EqualizerComponent::EqualizerComponent(AudioEngine* engine)
         bandLabels[i] = std::make_unique<juce::Label>("BandLabel", bandNames[i]);
         bandLabels[i]->setJustificationType(juce::Justification::centred);
         addAndMakeVisible(*bandLabels[i]);
+    }
+
+    // Map each 30-band display slider onto the real filter band whose center
+    // frequency is closest to it (in octaves), so several of them move the
+    // same real band together.
+    for (int i = 0; i < numVisualBands; ++i)
+    {
+        int nearest = 0;
+        float bestDist = std::numeric_limits<float>::max();
+        for (int j = 0; j < Equalizer::numBands; ++j)
+        {
+            float dist = std::abs(std::log2(visualFrequencies[i]) - std::log2(Equalizer::getFrequency(j)));
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                nearest = j;
+            }
+        }
+        visualToRealBand[i] = nearest;
+
+        visualBandSliders[i] = std::make_unique<juce::Slider>(juce::Slider::LinearVertical,
+                                                               juce::Slider::TextBoxBelow);
+        visualBandSliders[i]->setRange(-12.0, 12.0, 0.5);
+        visualBandSliders[i]->setValue(0.0);
+        visualBandSliders[i]->onValueChange = [this, i] { onVisualBandChanged(i); };
+        visualBandSliders[i]->setVisible(false);
+        addChildComponent(*visualBandSliders[i]);
+
+        visualBandLabels[i] = std::make_unique<juce::Label>("VisualBandLabel", visualBandNames[i]);
+        visualBandLabels[i]->setJustificationType(juce::Justification::centred);
+        visualBandLabels[i]->setFont(juce::Font(10.0f));
+        visualBandLabels[i]->setVisible(false);
+        addChildComponent(*visualBandLabels[i]);
     }
 
     volumeSlider = std::make_unique<juce::Slider>(juce::Slider::LinearVertical,
@@ -75,9 +114,58 @@ void EqualizerComponent::applyPreset(int comboIndex)
     {
         bandSliders[i]->setValue(preset.gains[i], juce::sendNotification);
     }
+    syncVisualBandsFromReal();
 
     // Update delete button — can only delete user presets
     deleteButton->setEnabled(!preset.isBuiltIn);
+}
+
+void EqualizerComponent::onToggleExpanded()
+{
+    expanded = !expanded;
+    expandButton->setButtonText(expanded ? "10-Band" : "30-Band");
+
+    if (expanded)
+        syncVisualBandsFromReal();
+
+    for (int i = 0; i < 10; ++i)
+    {
+        bandSliders[i]->setVisible(!expanded);
+        bandLabels[i]->setVisible(!expanded);
+    }
+    for (int i = 0; i < numVisualBands; ++i)
+    {
+        visualBandSliders[i]->setVisible(expanded);
+        visualBandLabels[i]->setVisible(expanded);
+    }
+
+    resized();
+    repaint();
+
+    if (onExpandedChanged)
+        onExpandedChanged();
+}
+
+void EqualizerComponent::syncVisualBandsFromReal()
+{
+    for (int i = 0; i < numVisualBands; ++i)
+        visualBandSliders[i]->setValue(bandSliders[visualToRealBand[i]]->getValue(),
+                                       juce::dontSendNotification);
+}
+
+void EqualizerComponent::onVisualBandChanged(int visualIndex)
+{
+    int real = visualToRealBand[visualIndex];
+    float value = (float)visualBandSliders[visualIndex]->getValue();
+
+    audioEngine->getEqualizer().setGain(real, value);
+    bandSliders[real]->setValue(value, juce::dontSendNotification);
+
+    // Keep every other display slider mapped to this same real band in sync,
+    // since they all represent the one underlying filter's gain.
+    for (int i = 0; i < numVisualBands; ++i)
+        if (i != visualIndex && visualToRealBand[i] == real)
+            visualBandSliders[i]->setValue(value, juce::dontSendNotification);
 }
 
 void EqualizerComponent::onSavePreset()
@@ -139,7 +227,8 @@ void EqualizerComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colours::darkgrey.withAlpha(0.5f));
     g.setColour(juce::Colours::white);
-    g.drawText("10-Band Equalizer", getLocalBounds().removeFromTop(20), juce::Justification::centred);
+    g.drawText(expanded ? "30-Band Equalizer" : "10-Band Equalizer",
+              getLocalBounds().removeFromTop(20), juce::Justification::centred);
 
     // Separator between EQ bands and volume slider
     if (volumeSlider != nullptr)
@@ -157,6 +246,8 @@ void EqualizerComponent::resized()
 
     // Preset bar
     auto presetBar = area.removeFromTop(28).reduced(0, 2);
+    expandButton->setBounds(presetBar.removeFromRight(60));
+    presetBar.removeFromRight(4);
     deleteButton->setBounds(presetBar.removeFromRight(60));
     presetBar.removeFromRight(4);
     saveButton->setBounds(presetBar.removeFromRight(60));
@@ -170,11 +261,24 @@ void EqualizerComponent::resized()
     volumeLabel->setBounds(volArea.removeFromBottom(20));
     volumeSlider->setBounds(volArea);
 
-    auto sliderWidth = area.getWidth() / 10;
-    for (int i = 0; i < 10; ++i)
+    if (expanded)
     {
-        auto sliderArea = area.removeFromLeft(sliderWidth).reduced(2);
-        bandLabels[i]->setBounds(sliderArea.removeFromBottom(20));
-        bandSliders[i]->setBounds(sliderArea);
+        auto sliderWidth = area.getWidth() / numVisualBands;
+        for (int i = 0; i < numVisualBands; ++i)
+        {
+            auto sliderArea = area.removeFromLeft(sliderWidth).reduced(1);
+            visualBandLabels[i]->setBounds(sliderArea.removeFromBottom(16));
+            visualBandSliders[i]->setBounds(sliderArea);
+        }
+    }
+    else
+    {
+        auto sliderWidth = area.getWidth() / 10;
+        for (int i = 0; i < 10; ++i)
+        {
+            auto sliderArea = area.removeFromLeft(sliderWidth).reduced(2);
+            bandLabels[i]->setBounds(sliderArea.removeFromBottom(20));
+            bandSliders[i]->setBounds(sliderArea);
+        }
     }
 }

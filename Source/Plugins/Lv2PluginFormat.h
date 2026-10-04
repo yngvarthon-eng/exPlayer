@@ -35,9 +35,6 @@ public:
         bool recursive,
         bool allowPluginsWhichRequireAsynchronousInstantiation) override;
 
-    /** Populate the known-plugin list with all installed LV2 plugins. */
-    void discoverAllPlugins(juce::OwnedArray<juce::PluginDescription>& results);
-
 protected:
     void createPluginInstance(const juce::PluginDescription& desc,
                               double initialSampleRate,
@@ -45,6 +42,11 @@ protected:
                               PluginCreationCallback callback) override;
 
 private:
+    // Lv2PluginInstance (Lv2PluginFormat.cpp) needs Pimpl's world pointer and its
+    // shared urid:map/unmap host feature to instantiate itself and build MIDI atom
+    // sequences each block.
+    friend class Lv2PluginInstance;
+
     struct Pimpl;
     std::unique_ptr<Pimpl> pimpl;
 

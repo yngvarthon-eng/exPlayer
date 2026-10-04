@@ -177,7 +177,8 @@ void PlaylistEditorComponent::addFilesFromDialog()
     fileChooser = std::make_unique<juce::FileChooser>(
         "Select audio files...",
         juce::File::getSpecialLocation(juce::File::userHomeDirectory),
-        "*.mp3;*.wav;*.flac;*.ogg;*.xtp;*.xtd;*.mod;*.xm;*.it;*.s3m;*.mptm;*.umx;*.ahx;*.ams;*.amf;*.med;*.mo3;*.mtm;*.okt;*.oct;*.stm;*.669;*.umf;*.drm;*.digi;*.far;*.mdl;*.mt2;*.dcm;*.dlm;*.ptm;*.pcm;*.dbm;*.dsm;*.cdm;*.hvl;*.c67;*.sfx;*.imf;*.u2b;*.psm;*.stp;*.symmod",
+        "*.mp3;*.wav;*.flac;*.ogg;*.xtp;*.xtd;*.mod;*.xm;*.it;*.s3m;*.mptm;*.umx;*.ahx;*.ams;*.amf;*.med;*.mo3;*.mtm;*.okt;*.oct;*.stm;*.669;*.umf;*.drm;*.digi;*.far;*.mdl;*.mt2;*.dcm;*.dlm;*.ptm;*.pcm;*.dbm;*.dsm;*.cdm;*.hvl;*.c67;*.sfx;*.imf;*.u2b;*.psm;*.stp;*.symmod;"
+        "*.mp4;*.mkv;*.avi;*.webm;*.mov;*.m4v;*.flv;*.wmv;*.mpg;*.mpeg;*.ts;*.ogv",
         // zenity 4.x (GTK4/libadwaita rewrite) has a known --file-filter regression
         // that silently drops some extensions from a multi-pattern filter, so use
         // JUCE's own cross-platform browser instead of shelling out to it.

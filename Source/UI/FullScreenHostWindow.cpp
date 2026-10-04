@@ -2,8 +2,9 @@
 #include "TransportShortcuts.h"
 
 FullScreenHostWindow::FullScreenHostWindow(juce::Component& contentToHost, AudioEngine* engine, PlaylistManager* playlist,
-                                           std::function<void()> closedCallback)
-    : content(contentToHost), audioEngine(engine), playlistManager(playlist), onClosed(std::move(closedCallback))
+                                           std::function<void()> closedCallback, bool hideCursorWhenShown)
+    : content(contentToHost), audioEngine(engine), playlistManager(playlist), onClosed(std::move(closedCallback)),
+      hideCursor(hideCursorWhenShown)
 {
     originalParent = content.getParentComponent();
     originalBounds = content.getBounds();
@@ -30,6 +31,9 @@ void FullScreenHostWindow::show()
 
     addAndMakeVisible(content); // reparents content here; addChildComponent auto-removes it from its old parent
     resized();
+
+    if (hideCursor)
+        setMouseCursor(juce::MouseCursor::NoCursor);
 
     setVisible(true);
     toFront(true);

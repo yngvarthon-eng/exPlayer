@@ -2,16 +2,20 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Export/VideoExporter.h"
+#include "../Export/PlaylistVideoExporter.h"
 
 // Modal settings panel for a video export: mode, combined layout (including a true
 // full-frame Overlay blend of grid + visualization), color theme, resolution, and three
 // independent optional text bands (top/center/bottom), each with its own static/marquee/
-// timed-slide-in-out animation. Replaces the old single AlertWindow (combo boxes and text
-// editors only) now that per-text sliders are needed for the animation parameters.
+// timed-slide-in-out animation and left/center/right horizontal position. Replaces the
+// old single AlertWindow (combo boxes and text editors only) now that per-text sliders
+// are needed for the animation parameters.
 class VideoExportSettingsDialog : public juce::Component
 {
 public:
-    explicit VideoExportSettingsDialog(bool hasPatternData);
+    // `isPlaylistMode` adds a section for playlist-only settings (track title overlay,
+    // transition between tracks) below the usual render settings.
+    explicit VideoExportSettingsDialog(bool hasPatternData, bool isPlaylistMode = false);
     ~VideoExportSettingsDialog() override;
 
     void resized() override;
@@ -20,6 +24,9 @@ public:
     // sourceFile/isXtpSequence/outputFile/pluginFactory -- this dialog only knows about
     // the render settings, not which file was chosen or which plugin is active.
     VideoExporter::Options buildOptions() const;
+
+    // Only meaningful when constructed with isPlaylistMode == true.
+    PlaylistVideoExporter::Settings buildPlaylistSettings() const;
 
     // Invoked when the user clicks Export/Cancel (or dismisses the window). Set these
     // before/after launch() -- they're only ever called later, from a user action.
@@ -39,6 +46,8 @@ private:
         juce::ComboBox slideCombo;
         juce::Label paramLabel { {}, {} };
         juce::Slider paramSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+        juce::Label alignLabel { {}, "Horizontal position" };
+        juce::ComboBox alignCombo;
 
         void setUp(juce::Component& parent, const juce::String& labelText);
         void updateParamControl(); // shows/relabels paramSlider for the current slide mode
@@ -49,6 +58,7 @@ private:
     void updateEnablement();
 
     bool hasPatternDataFlag;
+    bool isPlaylistModeFlag;
 
     juce::Label modeLabel { {}, "Mode" };
     juce::ComboBox modeCombo;
@@ -62,6 +72,13 @@ private:
     juce::ComboBox resolutionCombo;
 
     TextSlot topSlot, centerSlot, bottomSlot;
+
+    // Playlist-only controls -- created and shown only when isPlaylistModeFlag is true.
+    juce::ToggleButton trackTitleToggle { "Show an auto title overlay for each track" };
+    juce::Label transitionLabel { {}, "Transition between tracks" };
+    juce::ComboBox transitionCombo;
+    juce::Label transitionSecondsLabel { {}, "Transition length (s)" };
+    juce::Slider transitionSecondsSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
 
     juce::Label tipsLabel { {}, {} };
 

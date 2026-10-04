@@ -10,8 +10,13 @@
 #include "../Xtp/XtpSequencerSource.h"
 #include "../Xtp/XtpTransportClock.h"
 #include "../Export/VideoExporter.h"
+#include "../Export/PlaylistVideoExporter.h"
 #include "../Export/ScreenRecorder.h"
 #include "../Visualization/Plugins/WaveformPlugin.h"
+#include "../Video/VideoFileProbe.h"
+#include "../Video/FfmpegVideoFrameDecoder.h"
+#include "../Video/SubtitleTrack.h"
+#include "../Audio/FfmpegVideoAudioFormatReader.h"
 #include <thread>
 #include <chrono>
 
@@ -721,6 +726,83 @@ namespace
         }
         return true;
     }
+
+    // Generates a short synthetic video+audio file via ffmpeg's lavfi sources --
+    // a moving test pattern plus a pure sine tone -- so the video playback tests
+    // below have real, non-trivial content to probe/decode without needing a
+    // binary fixture checked into git. -g keeps keyframes frequent (default
+    // libx264 GOP length would otherwise exceed this file's whole duration,
+    // making seek tests meaningless -- everything would land on frame 0).
+    bool generateTestVideoFile(const juce::File& file, double durationSeconds,
+                               int width, int height, double fps, double toneHz)
+    {
+        file.deleteFile();
+
+        juce::StringArray args {
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-f", "lavfi", "-i", "testsrc=duration=" + juce::String(durationSeconds, 2)
+                                  + ":size=" + juce::String(width) + "x" + juce::String(height)
+                                  + ":rate=" + juce::String(fps, 2),
+            "-f", "lavfi", "-i", "sine=frequency=" + juce::String(toneHz, 2)
+                                  + ":duration=" + juce::String(durationSeconds, 2),
+            "-shortest",
+            "-c:v", "libx264", "-g", "5", "-keyint_min", "5",
+            "-c:a", "aac",
+            file.getFullPathName()
+        };
+
+        juce::ChildProcess process;
+        if (!process.start(args, juce::ChildProcess::wantStdErr))
+            return false;
+        process.readAllProcessOutput(); // blocks until ffmpeg exits
+        return file.existsAsFile();
+    }
+
+    // Generates an audio-only file with two distinguishable tones spliced back
+    // to back, so a seek test can tell whether it landed before or after the
+    // splice point by which frequency comes back.
+    bool generateTwoToneAudioFile(const juce::File& file, double toneASeconds, double toneAHz,
+                                  double toneBSeconds, double toneBHz)
+    {
+        file.deleteFile();
+
+        juce::StringArray args {
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-f", "lavfi", "-i", "sine=frequency=" + juce::String(toneAHz, 2)
+                                  + ":duration=" + juce::String(toneASeconds, 2),
+            "-f", "lavfi", "-i", "sine=frequency=" + juce::String(toneBHz, 2)
+                                  + ":duration=" + juce::String(toneBSeconds, 2),
+            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+            "-map", "[a]", "-c:a", "aac",
+            file.getFullPathName()
+        };
+
+        juce::ChildProcess process;
+        if (!process.start(args, juce::ChildProcess::wantStdErr))
+            return false;
+        process.readAllProcessOutput(); // blocks until ffmpeg exits
+        return file.existsAsFile();
+    }
+
+    // Estimates how many times the signal crosses zero per second -- enough to
+    // tell a 440Hz tone (~880 crossings/s) apart from an 880Hz one (~1760/s)
+    // without pulling in a full DSP/FFT dependency just for a test.
+    double estimateZeroCrossingsPerSecond(const float* data, int numSamples, double sampleRate)
+    {
+        int crossings = 0;
+        for (int i = 1; i < numSamples; ++i)
+            if ((data[i - 1] < 0.0f) != (data[i] < 0.0f))
+                ++crossings;
+        return numSamples > 0 ? crossings * sampleRate / numSamples : 0.0;
+    }
+
+    double computeRms(const float* data, int numSamples)
+    {
+        double sumSq = 0.0;
+        for (int i = 0; i < numSamples; ++i)
+            sumSq += (double) data[i] * (double) data[i];
+        return numSamples > 0 ? std::sqrt(sumSq / numSamples) : 0.0;
+    }
 }
 
 // NOTE: this test intentionally uses explicit if/throw checks rather than assert().
@@ -916,6 +998,172 @@ void testVideoExporter()
     std::cout << std::endl;
 }
 
+// NOTE: same NDEBUG/assert() caveat as testVideoExporter() above.
+void testPlaylistVideoExporter()
+{
+    std::cout << "=== Testing PlaylistVideoExporter ===" << std::endl;
+
+    if (!VideoExporter::isFfmpegAvailable())
+    {
+        std::cout << "! ffmpeg not found on PATH -- skipping PlaylistVideoExporter test" << std::endl << std::endl;
+        return;
+    }
+
+    juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    juce::File trackA = tempDir.getChildFile("sp2_playlist_export_track_a.wav");
+    juce::File trackB = tempDir.getChildFile("sp2_playlist_export_track_b.wav");
+    writeTestToneWav(trackA, 44100.0, 2.0);
+    writeTestToneWav(trackB, 44100.0, 1.5);
+
+    auto makeOptionsTemplate = []
+    {
+        VideoExporter::Options options;
+        options.width = 160;
+        options.height = 120;
+        options.pluginFactory = [] { return std::make_unique<WaveformPlugin>(); };
+        return options;
+    };
+
+    const std::vector<PlaylistVideoExporter::TrackSpec> tracks {
+        { trackA, false, "Track A", 2.0 },
+        { trackB, false, "Track B", 1.5 }
+    };
+
+    auto runToCompletion = [](PlaylistVideoExporter& exporter, const char* label)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + 60000;
+        while (!exporter.hasFinished())
+        {
+            if (juce::Time::getMillisecondCounter() > deadline)
+                throw std::runtime_error((juce::String("PlaylistVideoExporter (") + label
+                                         + ") did not finish within 60s").toStdString());
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    };
+
+    // Hard cut: stitched duration should be close to the sum of both tracks (~3.5s).
+    {
+        juce::File outputMp4 = tempDir.getChildFile("sp2_playlist_export_hardcut_output.mp4");
+        outputMp4.deleteFile();
+
+        PlaylistVideoExporter::Settings settings;
+        settings.transition = PlaylistVideoExporter::TransitionMode::HardCut;
+
+        PlaylistVideoExporter exporter(tracks, makeOptionsTemplate(), settings, outputMp4);
+        exporter.startExport();
+        runToCompletion(exporter, "hard cut");
+
+        if (exporter.getResult() != VideoExporter::Result::Success)
+            throw std::runtime_error("Hard-cut playlist export did not succeed: "
+                                     + exporter.getResultMessage().toStdString());
+        if (!outputMp4.existsAsFile() || outputMp4.getSize() <= 0)
+            throw std::runtime_error("Hard-cut playlist export produced no/empty output file");
+
+        const double duration = VideoFileProbe::probe(outputMp4).durationSeconds;
+        if (duration < 3.0 || duration > 4.0)
+            throw std::runtime_error("Hard-cut output duration " + std::to_string(duration)
+                                     + "s is not close to the expected ~3.5s");
+        std::cout << "✓ Hard-cut playlist export succeeded (" << outputMp4.getSize()
+                  << " bytes, " << duration << "s)" << std::endl;
+
+        outputMp4.deleteFile();
+    }
+
+    // Silence gap: stitched duration should include the extra ~1s gap (~4.5s).
+    {
+        juce::File outputMp4 = tempDir.getChildFile("sp2_playlist_export_silence_output.mp4");
+        outputMp4.deleteFile();
+
+        PlaylistVideoExporter::Settings settings;
+        settings.transition = PlaylistVideoExporter::TransitionMode::Silence;
+        settings.transitionSeconds = 1.0;
+
+        PlaylistVideoExporter exporter(tracks, makeOptionsTemplate(), settings, outputMp4);
+        exporter.startExport();
+        runToCompletion(exporter, "silence gap");
+
+        if (exporter.getResult() != VideoExporter::Result::Success)
+            throw std::runtime_error("Silence-gap playlist export did not succeed: "
+                                     + exporter.getResultMessage().toStdString());
+
+        const double duration = VideoFileProbe::probe(outputMp4).durationSeconds;
+        if (duration < 4.0 || duration > 5.0)
+            throw std::runtime_error("Silence-gap output duration " + std::to_string(duration)
+                                     + "s is not close to the expected ~4.5s");
+        std::cout << "✓ Silence-gap playlist export succeeded (" << duration << "s)" << std::endl;
+
+        outputMp4.deleteFile();
+    }
+
+    // Crossfade: stitched duration should be shorter than a hard cut by ~the 0.5s overlap
+    // (~3.0s).
+    {
+        juce::File outputMp4 = tempDir.getChildFile("sp2_playlist_export_crossfade_output.mp4");
+        outputMp4.deleteFile();
+
+        PlaylistVideoExporter::Settings settings;
+        settings.transition = PlaylistVideoExporter::TransitionMode::Crossfade;
+        settings.transitionSeconds = 0.5;
+
+        PlaylistVideoExporter exporter(tracks, makeOptionsTemplate(), settings, outputMp4);
+        exporter.startExport();
+        runToCompletion(exporter, "crossfade");
+
+        if (exporter.getResult() != VideoExporter::Result::Success)
+            throw std::runtime_error("Crossfade playlist export did not succeed: "
+                                     + exporter.getResultMessage().toStdString());
+
+        const double duration = VideoFileProbe::probe(outputMp4).durationSeconds;
+        if (duration < 2.5 || duration > 3.5)
+            throw std::runtime_error("Crossfade output duration " + std::to_string(duration)
+                                     + "s is not close to the expected ~3.0s");
+        std::cout << "✓ Crossfade playlist export succeeded (" << duration << "s)" << std::endl;
+
+        outputMp4.deleteFile();
+    }
+
+    // selectTracks(): a stream, a video file, a plain audio item, and a module/.xtp item.
+    // For a mode that needs pattern data, only the module item should survive; the stream
+    // and video items are excluded regardless of mode.
+    {
+        juce::Array<PlaylistItem> items;
+        items.add(PlaylistItem("http://example.com/stream", "Radio Stream"));
+
+        PlaylistItem videoItem(tempDir.getChildFile("fake.mp4"));
+        videoItem.name = "Some Video";
+        items.add(videoItem);
+
+        PlaylistItem plainAudio(trackA);
+        plainAudio.name = "Plain Audio";
+        items.add(plainAudio);
+
+        PlaylistItem moduleItem(tempDir.getChildFile("fake.xtp"));
+        moduleItem.name = "Module Song";
+        items.add(moduleItem);
+
+        std::vector<PlaylistVideoExporter::TrackSpec> selected;
+        std::vector<PlaylistVideoExporter::SkippedTrack> skipped;
+        PlaylistVideoExporter::selectTracks(items, VideoExporter::ExportMode::PatternGrid, selected, skipped);
+
+        if (selected.size() != 1 || selected[0].name != "Module Song")
+            throw std::runtime_error("selectTracks(PatternGrid) should keep only the module/.xtp item");
+        if (skipped.size() != 3)
+            throw std::runtime_error("selectTracks(PatternGrid) should skip the stream, video, and plain audio items");
+        std::cout << "✓ selectTracks() filters correctly for a pattern-data-requiring mode" << std::endl;
+
+        std::vector<PlaylistVideoExporter::TrackSpec> selectedViz;
+        std::vector<PlaylistVideoExporter::SkippedTrack> skippedViz;
+        PlaylistVideoExporter::selectTracks(items, VideoExporter::ExportMode::Visualization, selectedViz, skippedViz);
+        if (selectedViz.size() != 2 || skippedViz.size() != 2)
+            throw std::runtime_error("selectTracks(Visualization) should keep the plain audio and module items");
+        std::cout << "✓ selectTracks() keeps non-pattern tracks for Visualization mode" << std::endl;
+    }
+
+    trackA.deleteFile();
+    trackB.deleteFile();
+    std::cout << std::endl;
+}
+
 // Real-time capture (unlike VideoExporter's offline render), so this needs a
 // live X server + a pulse-compatible audio source, neither of which is
 // guaranteed in every environment this suite runs in -- skip gracefully
@@ -971,6 +1219,301 @@ void testScreenRecorder()
     std::cout << std::endl;
 }
 
+// Verifies VideoFileProbe's ffmpeg-stderr-banner parsing against a real,
+// freshly-generated video+audio file (see the video playback feature's
+// FfmpegVideoAudioFormatReader / FfmpegVideoFrameDecoder below).
+void testVideoFileProbe()
+{
+    std::cout << "=== Testing VideoFileProbe ===" << std::endl;
+
+    if (!VideoExporter::isFfmpegAvailable())
+    {
+        std::cout << "! ffmpeg not found on PATH -- skipping VideoFileProbe test" << std::endl << std::endl;
+        return;
+    }
+
+    juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    juce::File videoFile = tempDir.getChildFile("sp2_video_probe_test.mp4");
+
+    if (!generateTestVideoFile(videoFile, 5.0, 320, 240, 25.0, 1000.0))
+        throw std::runtime_error("Could not generate synthetic test video for probing");
+
+    auto result = VideoFileProbe::probe(videoFile);
+
+    if (result.errorMessage.isNotEmpty())
+        throw std::runtime_error("Probe reported an error: " + result.errorMessage.toStdString());
+    if (!result.hasVideo)
+        throw std::runtime_error("Probe did not detect a video stream");
+    if (!result.hasAudio)
+        throw std::runtime_error("Probe did not detect an audio stream");
+    if (result.width != 320 || result.height != 240)
+        throw std::runtime_error("Probe reported wrong resolution: "
+            + std::to_string(result.width) + "x" + std::to_string(result.height));
+    if (std::abs(result.fps - 25.0) > 1.0)
+        throw std::runtime_error("Probe reported wrong fps: " + std::to_string(result.fps));
+    if (std::abs(result.durationSeconds - 5.0) > 0.5)
+        throw std::runtime_error("Probe reported wrong duration: " + std::to_string(result.durationSeconds));
+
+    std::cout << "✓ Probed " << result.width << "x" << result.height << " @ " << result.fps
+              << "fps, duration=" << result.durationSeconds << "s, hasAudio=" << result.hasAudio << std::endl;
+
+    videoFile.deleteFile();
+    std::cout << std::endl;
+}
+
+void testSubtitleTrackParsing()
+{
+    std::cout << "=== Testing SubtitleTrack SRT parsing ===" << std::endl;
+
+    // CRLF line endings, a stray "<i>" markup tag, a multi-line cue, and a
+    // gap between cues 1 and 2 -- all realistic real-world .srt quirks.
+    juce::String srt =
+        "1\r\n"
+        "00:00:01,000 --> 00:00:02,500\r\n"
+        "<i>Hello world</i>\r\n"
+        "\r\n"
+        "2\r\n"
+        "00:00:05,000 --> 00:00:07,250\r\n"
+        "Line one\r\n"
+        "Line two\r\n";
+
+    auto cues = SubtitleTrack::parseSrt(srt);
+    if (cues.size() != 2)
+        throw std::runtime_error("Expected 2 cues, got " + std::to_string(cues.size()));
+
+    if (cues[0].text != "Hello world")
+        throw std::runtime_error("Markup not stripped: '" + cues[0].text.toStdString() + "'");
+    if (std::abs(cues[0].startSeconds - 1.0) > 1e-6 || std::abs(cues[0].endSeconds - 2.5) > 1e-6)
+        throw std::runtime_error("Cue 1 timestamps wrong");
+
+    if (cues[1].text != "Line one\nLine two")
+        throw std::runtime_error("Multi-line cue text wrong: '" + cues[1].text.toStdString() + "'");
+    if (std::abs(cues[1].startSeconds - 5.0) > 1e-6 || std::abs(cues[1].endSeconds - 7.25) > 1e-6)
+        throw std::runtime_error("Cue 2 timestamps wrong");
+
+    // findActiveCue: before/between/during/after.
+    if (SubtitleTrack::findActiveCue(cues, 0.5) != nullptr)
+        throw std::runtime_error("Expected no active cue before the first one");
+    if (SubtitleTrack::findActiveCue(cues, 3.5) != nullptr)
+        throw std::runtime_error("Expected no active cue in the gap between cues");
+    if (SubtitleTrack::findActiveCue(cues, 10.0) != nullptr)
+        throw std::runtime_error("Expected no active cue after the last one");
+
+    auto* active = SubtitleTrack::findActiveCue(cues, 1.5);
+    if (active == nullptr || active->text != "Hello world")
+        throw std::runtime_error("Expected cue 1 to be active at t=1.5s");
+
+    active = SubtitleTrack::findActiveCue(cues, 6.0);
+    if (active == nullptr || active->text != "Line one\nLine two")
+        throw std::runtime_error("Expected cue 2 to be active at t=6.0s");
+
+    // A malformed block (no "-->") should be skipped, not crash or throw off
+    // the cues around it.
+    juce::String malformed =
+        "not a real cue\n"
+        "still not one\n"
+        "\n"
+        "00:00:01,000 --> 00:00:02,000\n"
+        "Still parses this one\n";
+    auto malformedCues = SubtitleTrack::parseSrt(malformed);
+    if (malformedCues.size() != 1 || malformedCues[0].text != "Still parses this one")
+        throw std::runtime_error("Malformed leading block should be skipped, valid cue kept");
+
+    std::cout << "✓ Parsed " << cues.size() << " cues, markup stripped, lookup correct across gaps" << std::endl;
+    std::cout << std::endl;
+}
+
+void testFfmpegVideoAudioFormatReaderSequentialRead()
+{
+    std::cout << "=== Testing FfmpegVideoAudioFormatReader (sequential read) ===" << std::endl;
+
+    if (!VideoExporter::isFfmpegAvailable())
+    {
+        std::cout << "! ffmpeg not found on PATH -- skipping test" << std::endl << std::endl;
+        return;
+    }
+
+    juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    juce::File videoFile = tempDir.getChildFile("sp2_video_audio_seq_test.mp4");
+
+    const double duration = 3.0;
+    if (!generateTestVideoFile(videoFile, duration, 320, 240, 25.0, 1000.0))
+        throw std::runtime_error("Could not generate synthetic test video");
+
+    juce::String errorMessage;
+    auto reader = FfmpegVideoAudioFormatReader::createForFile(videoFile, duration, -1, errorMessage);
+    if (reader == nullptr)
+        throw std::runtime_error("createForFile failed: " + errorMessage.toStdString());
+
+    if (reader->sampleRate != FfmpegVideoAudioFormatReader::kSampleRate)
+        throw std::runtime_error("Unexpected sample rate: " + std::to_string(reader->sampleRate));
+    if ((int) reader->numChannels != FfmpegVideoAudioFormatReader::kChannels)
+        throw std::runtime_error("Unexpected channel count: " + std::to_string(reader->numChannels));
+
+    const juce::int64 expectedLength = (juce::int64) (duration * FfmpegVideoAudioFormatReader::kSampleRate);
+    if (std::abs((double) (reader->lengthInSamples - expectedLength)) > FfmpegVideoAudioFormatReader::kSampleRate * 0.5)
+        throw std::runtime_error("lengthInSamples doesn't match the probed duration: "
+            + std::to_string(reader->lengthInSamples) + " vs expected ~" + std::to_string(expectedLength));
+    std::cout << "✓ lengthInSamples=" << reader->lengthInSamples << " (~" << duration << "s @ 48kHz)" << std::endl;
+
+    const int numSamples = 48000; // 1 second
+    std::vector<float> left((size_t) numSamples), right((size_t) numSamples);
+    float* chans[2] = { left.data(), right.data() };
+    if (!reader->read(chans, 2, 0, numSamples))
+        throw std::runtime_error("read() returned false");
+
+    double rms = computeRms(left.data(), numSamples);
+    if (rms < 0.02)
+        throw std::runtime_error("Decoded audio is silent (RMS=" + std::to_string(rms) + ")");
+    std::cout << "✓ Decoded non-silent audio from position 0 (RMS=" << rms << ")" << std::endl;
+
+    videoFile.deleteFile();
+    std::cout << std::endl;
+}
+
+// Exercises the seek-detection-and-relaunch path end to end: reads forward from
+// 0 (should hear the first tone), then issues a deliberately non-sequential
+// readSamples() request -- exactly what MultiChannelAudioFormatReaderSource
+// produces after AudioTransportSource::setPosition() -- and confirms the
+// decoded audio actually comes from the point seeked to (second tone), not
+// wherever sequential decoding happened to be.
+void testFfmpegVideoAudioFormatReaderSeek()
+{
+    std::cout << "=== Testing FfmpegVideoAudioFormatReader (seek) ===" << std::endl;
+
+    if (!VideoExporter::isFfmpegAvailable())
+    {
+        std::cout << "! ffmpeg not found on PATH -- skipping test" << std::endl << std::endl;
+        return;
+    }
+
+    juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    juce::File audioFile = tempDir.getChildFile("sp2_video_audio_seek_test.m4a");
+
+    const double toneASeconds = 2.5, toneBSeconds = 2.5;
+    if (!generateTwoToneAudioFile(audioFile, toneASeconds, 440.0, toneBSeconds, 880.0))
+        throw std::runtime_error("Could not generate two-tone test audio file");
+
+    const double totalDuration = toneASeconds + toneBSeconds;
+    juce::String errorMessage;
+    auto reader = FfmpegVideoAudioFormatReader::createForFile(audioFile, totalDuration, -1, errorMessage);
+    if (reader == nullptr)
+        throw std::runtime_error("createForFile failed: " + errorMessage.toStdString());
+
+    const double sr = FfmpegVideoAudioFormatReader::kSampleRate;
+
+    // Sequential read from the start -- should be the 440Hz tone.
+    {
+        const int numSamples = (int) (sr * 0.5);
+        std::vector<float> left((size_t) numSamples), right((size_t) numSamples);
+        float* chans[2] = { left.data(), right.data() };
+        if (!reader->read(chans, 2, 0, numSamples))
+            throw std::runtime_error("read() at position 0 returned false");
+
+        double zc = estimateZeroCrossingsPerSecond(left.data(), numSamples, sr);
+        if (zc > 1200.0)
+            throw std::runtime_error("Expected the 440Hz tone near position 0, got zc=" + std::to_string(zc) + "/s");
+        std::cout << "✓ Sequential read at t=0 sounds like 440Hz (zc=" << zc << "/s)" << std::endl;
+    }
+
+    // A deliberately non-sequential request well past the splice point --
+    // should trigger relaunchAt() and land on the 880Hz tone.
+    {
+        const juce::int64 seekSample = (juce::int64) (3.0 * sr);
+        const int numSamples = (int) (sr * 0.5);
+        std::vector<float> left((size_t) numSamples), right((size_t) numSamples);
+        float* chans[2] = { left.data(), right.data() };
+        if (!reader->read(chans, 2, seekSample, numSamples))
+            throw std::runtime_error("read() after seek returned false");
+
+        double zc = estimateZeroCrossingsPerSecond(left.data(), numSamples, sr);
+        if (zc < 1400.0)
+            throw std::runtime_error("Expected the 880Hz tone after seeking to t=3s, got zc=" + std::to_string(zc) + "/s");
+        std::cout << "✓ Seeking to t=3s correctly lands on the 880Hz tone (zc=" << zc << "/s)" << std::endl;
+    }
+
+    audioFile.deleteFile();
+    std::cout << std::endl;
+}
+
+void testFfmpegVideoFrameDecoder()
+{
+    std::cout << "=== Testing FfmpegVideoFrameDecoder ===" << std::endl;
+
+    if (!VideoExporter::isFfmpegAvailable())
+    {
+        std::cout << "! ffmpeg not found on PATH -- skipping test" << std::endl << std::endl;
+        return;
+    }
+
+    juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    juce::File videoFile = tempDir.getChildFile("sp2_video_frame_decoder_test.mp4");
+
+    const double duration = 5.0;
+    const int width = 320, height = 240;
+    const double fps = 25.0;
+    if (!generateTestVideoFile(videoFile, duration, width, height, fps, 1000.0))
+        throw std::runtime_error("Could not generate synthetic test video");
+
+    FfmpegVideoFrameDecoder decoder(videoFile, width, height, fps);
+
+    auto waitForFrameNear = [&decoder](double targetSeconds, int timeoutMs)
+        -> std::shared_ptr<const FfmpegVideoFrameDecoder::Frame>
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+        std::shared_ptr<const FfmpegVideoFrameDecoder::Frame> frame;
+        while (frame == nullptr && juce::Time::getMillisecondCounter() < deadline)
+        {
+            frame = decoder.getFrameNear(targetSeconds);
+            if (frame == nullptr)
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return frame;
+    };
+
+    auto firstFrame = waitForFrameNear(0.4, 5000);
+    if (firstFrame == nullptr)
+        throw std::runtime_error("No frame arrived near t=0 within 5s");
+    if (firstFrame->image.getWidth() != width || firstFrame->image.getHeight() != height)
+        throw std::runtime_error("Decoded frame has the wrong dimensions");
+
+    // testsrc's pattern is a colourful moving gradient/bars -- confirm it isn't
+    // just a solid black frame (e.g. from a botched pixel conversion).
+    bool sawNonBlack = false;
+    for (int y = 0; y < height && !sawNonBlack; y += 17)
+        for (int x = 0; x < width && !sawNonBlack; x += 17)
+            if (firstFrame->image.getPixelAt(x, y) != juce::Colours::black)
+                sawNonBlack = true;
+    if (!sawNonBlack)
+        throw std::runtime_error("Decoded frame appears to be entirely black");
+    std::cout << "✓ First frame decoded (" << width << "x" << height
+              << ", timestamp=" << firstFrame->timestampSeconds << "s, non-black)" << std::endl;
+
+    // Reseek and confirm a fresh frame with a plausible timestamp and pixel
+    // content different from the first frame shows up (proving it isn't just
+    // replaying the same buffered frame).
+    decoder.seekTo(3.0);
+    auto seekedFrame = waitForFrameNear(3.5, 5000);
+    if (seekedFrame == nullptr)
+        throw std::runtime_error("No frame arrived after seekTo(3.0) within 5s");
+    if (seekedFrame->timestampSeconds < 2.0 || seekedFrame->timestampSeconds > 4.0)
+        throw std::runtime_error("Frame after seek has an implausible timestamp: "
+            + std::to_string(seekedFrame->timestampSeconds));
+
+    bool differsFromFirst = false;
+    for (int y = 0; y < height && !differsFromFirst; y += 17)
+        for (int x = 0; x < width && !differsFromFirst; x += 17)
+            if (seekedFrame->image.getPixelAt(x, y) != firstFrame->image.getPixelAt(x, y))
+                differsFromFirst = true;
+    if (!differsFromFirst)
+        throw std::runtime_error("Frame after seeking to t=3s is pixel-identical to the t=0 frame");
+    std::cout << "✓ Seek to t=3s produced a distinct frame (timestamp="
+              << seekedFrame->timestampSeconds << "s)" << std::endl;
+
+    videoFile.deleteFile();
+    std::cout << std::endl;
+}
+
 int main()
 {
     std::cout << "\n════════════════════════════════════════" << std::endl;
@@ -993,7 +1536,13 @@ int main()
         testXtpSequencerRowJump();
         testXtpSequencerChannelVolume();
         testVideoExporter();
+        testPlaylistVideoExporter();
         testScreenRecorder();
+        testVideoFileProbe();
+        testSubtitleTrackParsing();
+        testFfmpegVideoAudioFormatReaderSequentialRead();
+        testFfmpegVideoAudioFormatReaderSeek();
+        testFfmpegVideoFrameDecoder();
 
         std::cout << "════════════════════════════════════════" << std::endl;
         std::cout << "  ✅ All tests passed!" << std::endl;

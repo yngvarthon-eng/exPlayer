@@ -36,17 +36,24 @@ public:
     // need to change.
     enum class ColorTheme { Classic, MonoGreen, MonoAmber, Inverted };
 
-    // How a text layer's horizontal position behaves over time. Static sits centred
-    // in its band for the whole export; Marquee scrolls continuously right-to-left
-    // and loops forever; TimedSlideInOut slides in, holds, slides out, waits, repeats.
+    // How a text layer's horizontal position behaves over time. Static sits at its
+    // horizontal alignment for the whole export; Marquee scrolls continuously
+    // right-to-left and loops forever; TimedSlideInOut slides in, holds, slides
+    // out, waits, repeats.
     enum class TextSlide { Static, Marquee, TimedSlideInOut };
+
+    // Where a Static/TimedSlideInOut text layer rests horizontally within its band.
+    // Ignored by Marquee, which already crosses the full frame edge-to-edge
+    // regardless of this setting.
+    enum class TextHAlign { Left, Center, Right };
 
     struct TextLayer
     {
         juce::String text; // empty = layer is not drawn at all
         TextSlide slide = TextSlide::Static;
+        TextHAlign align = TextHAlign::Center;
         double marqueeSeconds = 8.0; // Marquee only: seconds for one full off-screen-to-off-screen crossing
-        double holdSeconds = 3.0;    // TimedSlideInOut only: seconds held centred between the slide in/out
+        double holdSeconds = 3.0;    // TimedSlideInOut only: seconds held at `align` between the slide in/out
     };
 
     struct Options
@@ -71,6 +78,14 @@ public:
         TextLayer centerText;
         TextLayer bottomText;
 
+        // Drawn as a small top-left badge, independent of the three bands above so it
+        // never collides with user-authored text regardless of their settings. Used by
+        // PlaylistVideoExporter for a per-track title; empty (the default) draws nothing.
+        // Only TimedSlideInOut/Static are meaningful here -- Marquee would loop forever
+        // across a track's whole duration, which defeats the "briefly announce the
+        // track" purpose.
+        TextLayer trackTitleOverlay;
+
         // Snapshot of the live UI's 10-band EQ gains at the moment export was
         // started, applied to the exported audio track. All-zero (the default)
         // means no EQ coloration. A snapshot rather than a shared Equalizer
@@ -86,6 +101,11 @@ public:
     explicit VideoExporter(Options exportOptions);
     ~VideoExporter() override;
 
+    // Frame rate every exported video is rendered at. Exposed (rather than kept private
+    // to VideoExporter.cpp) so PlaylistVideoExporter's filler-clip/crossfade ffmpeg
+    // commands can match it exactly without a second constant to keep in sync.
+    static constexpr int kFps = 25;
+
     // True if a working `ffmpeg` binary is reachable on PATH.
     static bool isFfmpegAvailable();
 
@@ -97,6 +117,12 @@ public:
     Result getResult() const { return result; }
     const juce::String& getResultMessage() const { return resultMessage; }
 
+    // Exact rendered length (numFrames / fps), valid once hasFinished() and the result
+    // was Success. Used by PlaylistVideoExporter for crossfade offset math -- more
+    // reliable than playlist metadata duration, which isn't guaranteed exact for
+    // modules/.xtp songs.
+    double getRenderedDurationSeconds() const { return renderedDurationSeconds; }
+
 private:
     void run() override;
     void finishWith(Result r, const juce::String& message);
@@ -106,6 +132,7 @@ private:
     std::atomic<bool> finished { false };
     Result result = Result::Failed;
     juce::String resultMessage;
+    double renderedDurationSeconds = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VideoExporter)
 };

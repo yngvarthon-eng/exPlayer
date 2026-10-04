@@ -1,6 +1,11 @@
 #include "AudioEngine.h"
 #include "ModPlugFormat.h"
+#include "MidiInputSettings.h"
+#include "FfmpegAudioFormatReader.h"
+#include "FfmpegVideoAudioFormatReader.h"
+#include "../Video/VideoFileProbe.h"
 #include "../Playlist/PlaylistManager.h"
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -91,6 +96,35 @@ void AudioEngine::initialise()
     }
 
     deviceManager->addAudioCallback(this);
+
+    // Restore whichever hardware MIDI inputs the user previously picked (see
+    // setMidiInputEnabled) — nothing is auto-enabled, since a controller that
+    // enumerates under more than one driver/port (common with class-compliant USB
+    // MIDI keyboards) would otherwise silently deliver every note twice.
+    const auto available = juce::MidiInput::getAvailableDevices();
+    for (const auto& identifier : MidiInputSettings::loadEnabledIdentifiers())
+    {
+        const bool stillAvailable = std::any_of(available.begin(), available.end(),
+            [&identifier](const juce::MidiDeviceInfo& d) { return d.identifier == identifier; });
+        if (stillAvailable)
+            setMidiInputEnabled(identifier, true);
+    }
+}
+
+void AudioEngine::setMidiInputEnabled(const juce::String& identifier, bool enabled)
+{
+    deviceManager->setMidiInputDeviceEnabled(identifier, enabled);
+
+    if (enabled)
+        deviceManager->addMidiInputDeviceCallback(identifier, &midiCollector);
+    else
+        deviceManager->removeMidiInputDeviceCallback(identifier, &midiCollector);
+
+    juce::StringArray nowEnabled;
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (deviceManager->isMidiInputDeviceEnabled(device.identifier))
+            nowEnabled.add(device.identifier);
+    MidiInputSettings::saveEnabledIdentifiers(nowEnabled);
 }
 
 AudioEngine::~AudioEngine()
@@ -120,6 +154,8 @@ AudioEngine::~AudioEngine()
     stopRecording();
 
     deviceManager->removeAudioCallback(this);
+    for (auto& midiInput : juce::MidiInput::getAvailableDevices())
+        deviceManager->removeMidiInputDeviceCallback(midiInput.identifier, &midiCollector);
     if (playlistManager != nullptr)
         playlistManager->removeChangeListener(this);
 
@@ -279,6 +315,124 @@ void AudioEngine::loadXtpSequence(const juce::File& file)
     transportSource->start();
 }
 
+void AudioEngine::loadVideo(const juce::File& file)
+{
+    selectedVideoAudioTrack = -1;
+    loadVideoInternal(file, -1, 0.0, true);
+}
+
+void AudioEngine::setVideoAudioTrack(int trackIndex)
+{
+    if (currentVideoFile == juce::File{})
+        return;
+
+    const double resumeAt = getCurrentPlaybackTime();
+    const bool wasPlaying = isPlaying();
+    selectedVideoAudioTrack = trackIndex;
+    loadVideoInternal(currentVideoFile, trackIndex, resumeAt, wasPlaying);
+}
+
+void AudioEngine::loadVideoInternal(const juce::File& file, int audioTrackIndex,
+                                    double resumeAtSeconds, bool autoPlay)
+{
+    currentVideoFile = file;
+
+    // Tear down current playback on the message thread (same pattern as
+    // loadTrack/loadXtpSequence/loadStream).
+    transportSource->stop();
+    transportSource->setSource(nullptr);
+#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+    openMptReader = nullptr;
+#endif
+    readerSource.reset();
+    xtpSource.reset();
+
+    modulePatternData.clear();
+    currentStreamUrl.clear();
+    streamWasPaused = false;
+    activeProgramChannels.store(2);
+    currentlyStreaming.store(false);
+    streamReconnectInProgress.store(false);
+    streamReconnectFailed.store(false);
+    lastFileWasModule = false;
+
+    // Bump the generation so any in-flight stream/video load from a previous
+    // call is discarded -- reuses loadStream()'s cancellation token, since this
+    // shares its "blocking work off the message thread, hop back via callAsync"
+    // machinery rather than inventing a parallel one.
+    int generation = ++(*streamLoadGeneration);
+
+    if (streamLoader)
+        streamLoader->signalThreadShouldExit();
+    zombieLoaders.erase(
+        std::remove_if(zombieLoaders.begin(), zombieLoaders.end(),
+                       [](const auto& t) { return !t->isThreadRunning(); }),
+        zombieLoaders.end());
+    if (streamLoader && streamLoader->isThreadRunning())
+        zombieLoaders.push_back(std::move(streamLoader));
+    else
+        streamLoader.reset();
+
+    streamLoader = std::make_unique<StreamLoader>();
+
+    auto genToken = streamLoadGeneration;
+    streamLoader->task = [this, file, generation, genToken, audioTrackIndex, resumeAtSeconds, autoPlay]()
+    {
+        // Probing (an ffmpeg spawn + blocking stderr read) is fast but not
+        // instant -- keep it off the message thread, same rationale as
+        // loadStream()'s network probe.
+        VideoProbeResult probe = VideoFileProbe::probe(file);
+
+        if (genToken->load() != generation)
+            return; // a newer load was requested; discard this one
+
+        if (!probe.hasAudio)
+        {
+            fprintf(stderr, "AudioEngine: video '%s' has no audio track -- cannot play "
+                             "(audio is the required playback clock)\n",
+                    file.getFileName().toRawUTF8());
+            return;
+        }
+
+        juce::String errorMessage;
+        auto ffmpegReader = FfmpegVideoAudioFormatReader::createForFile(
+            file, probe.durationSeconds, audioTrackIndex, errorMessage);
+        if (ffmpegReader == nullptr)
+        {
+            fprintf(stderr, "AudioEngine: failed to load video '%s': %s\n",
+                    file.getFileName().toRawUTF8(), errorMessage.toRawUTF8());
+            return;
+        }
+
+        std::unique_ptr<juce::AudioFormatReader> baseReader = std::move(ffmpegReader);
+        auto ownedReader = std::make_shared<std::unique_ptr<juce::AudioFormatReader>>(std::move(baseReader));
+
+        juce::MessageManager::callAsync([this, generation, genToken, ownedReader, resumeAtSeconds, autoPlay]()
+        {
+            if (genToken->load() != generation)
+                return; // AudioEngine was destroyed or a newer load was requested
+
+            activeProgramChannels.store(FfmpegVideoAudioFormatReader::kChannels);
+            readerSource = std::make_unique<MultiChannelAudioFormatReaderSource>(
+                ownedReader->release(), true);
+
+            // Read-ahead buffered, same as loadStream(): a seek relaunches ffmpeg,
+            // which is far slower than a local fseek, so that latency needs to
+            // land on the background read-ahead thread, not the audio callback.
+            transportSource->setSource(readerSource.get(), 65536, &readAheadThread,
+                                       FfmpegVideoAudioFormatReader::kSampleRate,
+                                       activeProgramChannels.load());
+            if (resumeAtSeconds > 0.0)
+                transportSource->setPosition(resumeAtSeconds);
+            if (autoPlay)
+                transportSource->start();
+            fprintf(stderr, "AudioEngine: loaded video, duration=%.1fs\n",
+                    transportSource->getLengthInSeconds());
+        });
+    };
+    streamLoader->startThread();
+}
+
 void AudioEngine::loadStream(const juce::String& url, bool reconnecting, int reconnectAttempt)
 {
     // Tear down current playback on the message thread (safe to do here).
@@ -395,39 +549,28 @@ void AudioEngine::loadStream(const juce::String& url, bool reconnecting, int rec
         if (resolvedUrl != url)
             fprintf(stderr, "AudioEngine: playlist resolved to '%s'\n", resolvedUrl.toRawUTF8());
 
-        juce::URL juceUrl(resolvedUrl);
-        auto inputStream = juceUrl.createInputStream(
-            juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
-                .withConnectionTimeoutMs(10000)
-                .withNumRedirectsToFollow(5));
-
-        if (inputStream == nullptr)
-        {
-            fprintf(stderr, "AudioEngine: failed to open stream '%s'\n", resolvedUrl.toRawUTF8());
-            if (reconnecting && reconnectAttempt < kMaxReconnectRetries)
-            {
-                scheduleReconnectRetryIfCurrent();
-            }
-            else
-            {
-                markReconnectFailedIfCurrent();
-            }
-            return;
-        }
+        // Streams are decoded exclusively through ffmpeg rather than trying JUCE's
+        // native AudioFormatManager first. MP3 has no reliable magic-number header,
+        // and JUCE's MP3 sniffer (JUCE_USE_MP3AUDIOFORMAT) can false-positive-match
+        // on non-MP3 stream bytes -- e.g. it mis-detected a live AAC stream as a
+        // 12kHz/32kHz MP3 (varies by run, the signature of a frame-sync false
+        // positive), and JUCE's MP3 decoder then hung the message thread trying to
+        // decode AAC data as MP3 frames. ffmpeg's own probing doesn't share that
+        // failure mode, and covers every format JUCE's native readers handle anyway
+        // (FLAC, Ogg, WAV, MP3) plus AAC-LC/HE-AAC v1/v2, which JUCE has no Linux
+        // decoder for at all.
+        juce::String ffmpegError;
+        auto ffmpegReader = FfmpegAudioFormatReader::createForUrl(resolvedUrl, ffmpegError);
 
         if (genToken->load() != generation)
             return; // A newer load was requested; discard this connection.
 
-        // HTTP streams aren't seekable. AudioFormatManager rewinds the stream between
-        // format-probing attempts, which triggers a jassert. Wrapping in
-        // BufferedInputStream lets JUCE seek within its in-memory cache.
-        auto bufferedStream = std::make_unique<juce::BufferedInputStream>(
-            inputStream.release(), 65536, true);
+        auto* reader = ffmpegReader.release();
 
-        auto* reader = formatManager->createReaderFor(std::move(bufferedStream));
         if (reader == nullptr)
         {
-            fprintf(stderr, "AudioEngine: no format reader for stream '%s'\n", resolvedUrl.toRawUTF8());
+            fprintf(stderr, "AudioEngine: no format reader for stream '%s': %s\n",
+                    resolvedUrl.toRawUTF8(), ffmpegError.toRawUTF8());
             if (reconnecting && reconnectAttempt < kMaxReconnectRetries)
             {
                 scheduleReconnectRetryIfCurrent();
@@ -825,6 +968,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     resamplingSource->prepareToPlay(bufferSize, sampleRate);
     equalizer.prepare(sampleRate, bufferSize, activeOutputChannels.load());
     pluginChain.prepare(sampleRate, bufferSize);
+    midiCollector.reset(sampleRate);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -870,7 +1014,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
     // Apply equalizer, plugin chain, and master gain
     equalizer.process(outputBuffer, juce::jmin(programChannels, numOutputChannels), numSamples);
-    pluginChain.process(outputBuffer);
+
+    juce::MidiBuffer midi;
+    midiCollector.removeNextBlockOfMessages(midi, numSamples);
+    midiKeyboardState.processNextMidiBuffer(midi, 0, numSamples, true);
+    pluginChain.process(outputBuffer, midi);
 
     if (programChannels == 2
         && stereoExpansionMode.load() == StereoExpansionMode::MultiSpeakerStereo)
@@ -961,6 +1109,8 @@ void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster*)
         {
             if (item->isStream)
                 loadStream(item->streamUrl);
+            else if (item->isVideo)
+                loadVideo(item->file);
             else if (item->isXtpSequence)
                 loadXtpSequence(item->file);
             else

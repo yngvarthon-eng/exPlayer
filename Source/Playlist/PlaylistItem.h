@@ -14,6 +14,7 @@ struct PlaylistItem
     bool isModule = false; // True for tracker module formats
     bool isStream = false; // True for HTTP/HTTPS audio streams
     bool isXtpSequence = false; // True for exTracker's native .xtp song format
+    bool isVideo = false; // True for video container files (played via AudioEngine::loadVideo)
     juce::String streamUrl;// Non-empty when isStream == true
 
     PlaylistItem() = default;
@@ -22,6 +23,9 @@ struct PlaylistItem
     {
         auto ext = f.getFileExtension().toLowerCase();
         isXtpSequence = (ext == ".xtp" || ext == ".xtd");
+        isVideo = (ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".webm"
+                   || ext == ".mov" || ext == ".m4v" || ext == ".flv" || ext == ".wmv"
+                   || ext == ".mpg" || ext == ".mpeg" || ext == ".ts" || ext == ".ogv");
         isModule = (ext == ".mod" || ext == ".xm" || ext == ".it" || ext == ".s3m"
                     || ext == ".mptm" || ext == ".umx" || ext == ".ahx"
                     || ext == ".ams" || ext == ".amf" || ext == ".med"

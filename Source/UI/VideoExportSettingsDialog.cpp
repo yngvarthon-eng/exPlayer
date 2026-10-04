@@ -2,7 +2,7 @@
 
 namespace
 {
-    constexpr int kSlotHeight = 88;
+    constexpr int kSlotHeight = 116;
 
     // Own DialogWindow subclass rather than DialogWindow::LaunchOptions -- the default
     // LaunchOptions-created window's closeButtonPressed() just calls setVisible(false)
@@ -38,6 +38,13 @@ void VideoExportSettingsDialog::TextSlot::setUp(juce::Component& parent, const j
     parent.addAndMakeVisible(paramLabel);
     parent.addAndMakeVisible(paramSlider);
 
+    parent.addAndMakeVisible(alignLabel);
+    alignCombo.addItem("Left", 1);
+    alignCombo.addItem("Center", 2);
+    alignCombo.addItem("Right", 3);
+    alignCombo.setSelectedId(2, juce::dontSendNotification);
+    parent.addAndMakeVisible(alignCombo);
+
     updateParamControl();
 }
 
@@ -51,6 +58,9 @@ void VideoExportSettingsDialog::TextSlot::updateParamControl()
             paramSlider.setValue(8.0, juce::dontSendNotification);
             paramLabel.setEnabled(true);
             paramSlider.setEnabled(true);
+            // Marquee always crosses edge-to-edge, so horizontal position has no effect.
+            alignLabel.setEnabled(false);
+            alignCombo.setEnabled(false);
             break;
         case 2: // Timed slide in/out
             paramLabel.setText("Hold time (s)", juce::dontSendNotification);
@@ -58,11 +68,15 @@ void VideoExportSettingsDialog::TextSlot::updateParamControl()
             paramSlider.setValue(3.0, juce::dontSendNotification);
             paramLabel.setEnabled(true);
             paramSlider.setEnabled(true);
+            alignLabel.setEnabled(true);
+            alignCombo.setEnabled(true);
             break;
         default: // Static
             paramLabel.setText("(not animated)", juce::dontSendNotification);
             paramLabel.setEnabled(false);
             paramSlider.setEnabled(false);
+            alignLabel.setEnabled(true);
+            alignCombo.setEnabled(true);
             break;
     }
 }
@@ -78,6 +92,13 @@ VideoExporter::TextLayer VideoExportSettingsDialog::TextSlot::buildLayer() const
         VideoExporter::TextSlide::TimedSlideInOut
     };
     layer.slide = slides[juce::jlimit(0, 2, slideCombo.getSelectedItemIndex())];
+
+    static const VideoExporter::TextHAlign aligns[] = {
+        VideoExporter::TextHAlign::Left,
+        VideoExporter::TextHAlign::Center,
+        VideoExporter::TextHAlign::Right
+    };
+    layer.align = aligns[juce::jlimit(0, 2, alignCombo.getSelectedItemIndex())];
 
     if (layer.slide == VideoExporter::TextSlide::Marquee)
         layer.marqueeSeconds = paramSlider.getValue();
@@ -99,12 +120,18 @@ int VideoExportSettingsDialog::TextSlot::layout(juce::Rectangle<int> area)
     paramRow.removeFromLeft(8);
     paramLabel.setBounds(paramRow.removeFromLeft(110));
     paramSlider.setBounds(paramRow);
+    area.removeFromTop(4);
+
+    auto alignRow = area.removeFromTop(24);
+    alignLabel.setBounds(alignRow.removeFromLeft(160));
+    alignRow.removeFromLeft(8);
+    alignCombo.setBounds(alignRow.removeFromLeft(120));
 
     return area.getY();
 }
 
-VideoExportSettingsDialog::VideoExportSettingsDialog(bool hasPatternData)
-    : hasPatternDataFlag(hasPatternData)
+VideoExportSettingsDialog::VideoExportSettingsDialog(bool hasPatternData, bool isPlaylistMode)
+    : hasPatternDataFlag(hasPatternData), isPlaylistModeFlag(isPlaylistMode)
 {
     addAndMakeVisible(modeLabel);
     modeCombo.addItem("Visualization", 1);
@@ -150,6 +177,25 @@ VideoExportSettingsDialog::VideoExportSettingsDialog(bool hasPatternData)
     centerSlot.setUp(*this, "Center text");
     bottomSlot.setUp(*this, "Bottom text");
 
+    if (isPlaylistModeFlag)
+    {
+        trackTitleToggle.setToggleState(true, juce::dontSendNotification);
+        addAndMakeVisible(trackTitleToggle);
+
+        addAndMakeVisible(transitionLabel);
+        transitionCombo.addItem("Hard cut", 1);
+        transitionCombo.addItem("Crossfade", 2);
+        transitionCombo.addItem("Silence gap", 3);
+        transitionCombo.setSelectedId(1, juce::dontSendNotification);
+        transitionCombo.onChange = [this] { updateEnablement(); };
+        addAndMakeVisible(transitionCombo);
+
+        addAndMakeVisible(transitionSecondsLabel);
+        transitionSecondsSlider.setRange(0.25, 5.0, 0.25);
+        transitionSecondsSlider.setValue(1.0, juce::dontSendNotification);
+        addAndMakeVisible(transitionSecondsSlider);
+    }
+
     tipsLabel.setText(
         "Tips: Overlay reads best with a busy grid + a sparse plugin (Bars/Radial/VU) -- "
         "dense ones like Spectrogram fight the grid for attention. Give Marquee text a few "
@@ -167,7 +213,7 @@ VideoExportSettingsDialog::VideoExportSettingsDialog(bool hasPatternData)
     addAndMakeVisible(cancelButton);
 
     updateEnablement();
-    setSize(480, 610);
+    setSize(480, isPlaylistModeFlag ? 784 : 694);
 }
 
 VideoExportSettingsDialog::~VideoExportSettingsDialog() = default;
@@ -181,6 +227,13 @@ void VideoExportSettingsDialog::updateEnablement()
     const bool overlay = combined && layoutCombo.getSelectedItemIndex() == 4;
     overlayOpacityLabel.setEnabled(overlay);
     overlayOpacitySlider.setEnabled(overlay);
+
+    if (isPlaylistModeFlag)
+    {
+        const bool needsDuration = transitionCombo.getSelectedItemIndex() != 0; // not Hard cut
+        transitionSecondsLabel.setEnabled(needsDuration);
+        transitionSecondsSlider.setEnabled(needsDuration);
+    }
 }
 
 void VideoExportSettingsDialog::resized()
@@ -218,6 +271,22 @@ void VideoExportSettingsDialog::resized()
     area.removeFromTop(8);
     bottomSlot.layout(area.removeFromTop(kSlotHeight));
     area.removeFromTop(12);
+
+    if (isPlaylistModeFlag)
+    {
+        trackTitleToggle.setBounds(area.removeFromTop(22));
+        area.removeFromTop(8);
+
+        row = area.removeFromTop(22);
+        transitionLabel.setBounds(row.removeFromLeft(160));
+        transitionCombo.setBounds(row);
+        area.removeFromTop(8);
+
+        row = area.removeFromTop(22);
+        transitionSecondsLabel.setBounds(row.removeFromLeft(160));
+        transitionSecondsSlider.setBounds(row);
+        area.removeFromTop(12);
+    }
 
     tipsLabel.setBounds(area.removeFromTop(64));
     area.removeFromTop(12);
@@ -266,6 +335,22 @@ VideoExporter::Options VideoExportSettingsDialog::buildOptions() const
     options.bottomText = bottomSlot.buildLayer();
 
     return options;
+}
+
+PlaylistVideoExporter::Settings VideoExportSettingsDialog::buildPlaylistSettings() const
+{
+    PlaylistVideoExporter::Settings settings;
+    settings.showTrackTitles = trackTitleToggle.getToggleState();
+
+    static const PlaylistVideoExporter::TransitionMode transitions[] = {
+        PlaylistVideoExporter::TransitionMode::HardCut,
+        PlaylistVideoExporter::TransitionMode::Crossfade,
+        PlaylistVideoExporter::TransitionMode::Silence
+    };
+    settings.transition = transitions[juce::jlimit(0, 2, transitionCombo.getSelectedItemIndex())];
+    settings.transitionSeconds = transitionSecondsSlider.getValue();
+
+    return settings;
 }
 
 void VideoExportSettingsDialog::launch(std::unique_ptr<VideoExportSettingsDialog> dialog)

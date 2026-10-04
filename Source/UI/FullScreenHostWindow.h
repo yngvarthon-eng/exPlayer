@@ -18,8 +18,12 @@ public:
     // `content` must outlive this window (it always does here: MainComponent
     // owns both the content and, indirectly via the onClosed callback, this
     // window's lifetime).
+    // `hideCursor` blanks the mouse pointer while this window is up -- used
+    // for video playback, where there's nothing to point at and transport is
+    // all keyboard shortcuts; left off for the sequencer view, which still
+    // has clickable pattern cells.
     FullScreenHostWindow(juce::Component& content, AudioEngine* engine, PlaylistManager* playlist,
-                         std::function<void()> onClosed);
+                         std::function<void()> onClosed, bool hideCursor = false);
     ~FullScreenHostWindow() override;
 
     // Adds this to the desktop, enters kiosk mode, reparents content in, and
@@ -42,6 +46,7 @@ private:
     bool restored = false;
 
     std::function<void()> onClosed;
+    bool hideCursor = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FullScreenHostWindow)
 };

@@ -7,15 +7,17 @@
 #include "../Visualization/SpectrumAnalyzer.h"
 #include "../Visualization/ModulePatternData.h"
 #include "../UI/ModulePatternViewer.h"
+#include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <utility>
 
 namespace
 {
     using namespace FfmpegProcess;
 
-    constexpr int kFps = 25; // matches the live VisualizationComponent timer / plugin decay tuning
+    constexpr int kFps = VideoExporter::kFps; // matches the live VisualizationComponent timer / plugin decay tuning
     constexpr int kBytesPerPixel = 4; // BGRA
 
     // Splits the full frame into the (possibly empty) rectangles used for the
@@ -150,7 +152,15 @@ namespace
         const int textWidth = g.getCurrentFont().getStringWidth(layer.text) + 24;
         const int boxHeight = fontHeight + 16;
         const int margin = 16;
-        const int centeredX = (image.getWidth() - textWidth) / 2;
+
+        // Resting horizontal position for Static, and the hold position between the
+        // slide in/out for TimedSlideInOut. Marquee ignores this entirely -- it
+        // already crosses the full frame edge-to-edge regardless of alignment.
+        int restX = (image.getWidth() - textWidth) / 2; // Center
+        if (layer.align == VideoExporter::TextHAlign::Left)
+            restX = margin;
+        else if (layer.align == VideoExporter::TextHAlign::Right)
+            restX = image.getWidth() - textWidth - margin;
 
         int y = margin;
         if (band == VerticalBand::Center)
@@ -158,7 +168,7 @@ namespace
         else if (band == VerticalBand::Bottom)
             y = image.getHeight() - boxHeight - margin;
 
-        int x = centeredX;
+        int x = restX;
         switch (layer.slide)
         {
             case VideoExporter::TextSlide::Static:
@@ -177,19 +187,19 @@ namespace
 
             case VideoExporter::TextSlide::TimedSlideInOut:
             {
-                // One cycle: slide in, hold centred, slide out, gap -- then repeats.
+                // One cycle: slide in, hold at `align`, slide out, gap -- then repeats.
                 const double slideDur = 0.6;
                 const double gapDur = 0.8;
                 const double cycle = slideDur + layer.holdSeconds + slideDur + gapDur;
                 const double t = std::fmod(timeSeconds, juce::jmax(0.1, cycle));
 
                 if (t < slideDur)
-                    x = (int) juce::jmap(t, 0.0, slideDur, (double) -textWidth, (double) centeredX);
+                    x = (int) juce::jmap(t, 0.0, slideDur, (double) -textWidth, (double) restX);
                 else if (t < slideDur + layer.holdSeconds)
-                    x = centeredX;
+                    x = restX;
                 else if (t < slideDur * 2.0 + layer.holdSeconds)
                     x = (int) juce::jmap(t - slideDur - layer.holdSeconds, 0.0, slideDur,
-                                         (double) centeredX, (double) image.getWidth());
+                                         (double) restX, (double) image.getWidth());
                 else
                     return; // hidden during the gap between cycles
                 break;
@@ -203,11 +213,63 @@ namespace
         g.drawText(layer.text, box, juce::Justification::centred, true);
     }
 
+    // Small top-left badge for PlaylistVideoExporter's per-track title, kept deliberately
+    // separate from drawSlidingText's centred top/center/bottom bands so it never
+    // collides with a user's own text layers. `timeSeconds` is relative to this track's
+    // own start (each playlist track renders through its own VideoExporter instance), so
+    // TimedSlideInOut's one-shot-looking reveal happens right as the track begins.
+    void drawTrackTitleBadge(juce::Image& image, const VideoExporter::TextLayer& layer, double timeSeconds)
+    {
+        if (layer.text.isEmpty())
+            return;
+
+        juce::Graphics g(image);
+        const int fontHeight = juce::jlimit(10, 32, image.getHeight() / 28);
+        g.setFont(juce::Font((float) fontHeight, juce::Font::bold));
+
+        const int textWidth = g.getCurrentFont().getStringWidth(layer.text) + 20;
+        const int boxHeight = fontHeight + 14;
+        const int margin = 16;
+        const int targetY = margin;
+
+        int y = targetY;
+        switch (layer.slide)
+        {
+            case VideoExporter::TextSlide::Static:
+            case VideoExporter::TextSlide::Marquee: // scrolling makes no sense for a title badge; treat as Static
+                break;
+
+            case VideoExporter::TextSlide::TimedSlideInOut:
+            {
+                const double slideDur = 0.4;
+                const double cycle = slideDur + layer.holdSeconds + slideDur;
+                if (timeSeconds >= cycle)
+                    return; // shown once at the start of the track, then gone for good
+
+                if (timeSeconds < slideDur)
+                    y = (int) juce::jmap(timeSeconds, 0.0, slideDur, (double) -boxHeight, (double) targetY);
+                else if (timeSeconds < slideDur + layer.holdSeconds)
+                    y = targetY;
+                else
+                    y = (int) juce::jmap(timeSeconds - slideDur - layer.holdSeconds, 0.0, slideDur,
+                                         (double) targetY, (double) -boxHeight);
+                break;
+            }
+        }
+
+        juce::Rectangle<int> box(margin, y, textWidth, boxHeight);
+        g.setColour(juce::Colours::black.withAlpha(0.6f));
+        g.fillRoundedRectangle(box.toFloat(), 5.0f);
+        g.setColour(juce::Colours::white);
+        g.drawText(layer.text, box, juce::Justification::centred, true);
+    }
+
     void drawTextOverlays(juce::Image& image, const VideoExporter::Options& options, double timeSeconds)
     {
         drawSlidingText(image, options.topText, VerticalBand::Top, timeSeconds);
         drawSlidingText(image, options.centerText, VerticalBand::Center, timeSeconds);
         drawSlidingText(image, options.bottomText, VerticalBand::Bottom, timeSeconds);
+        drawTrackTitleBadge(image, options.trackTitleOverlay, timeSeconds);
     }
 }
 
@@ -230,6 +292,28 @@ void VideoExporter::finishWith(Result r, const juce::String& message)
 
 bool VideoExporter::isFfmpegAvailable()
 {
+    // Called from every ffmpeg entry point (audio reader, video frame decoder,
+    // subtitle extraction, export, screen recorder, ...) and loading a single
+    // video fires several of these concurrently from different threads (the
+    // audio-track and video-frame paths each check independently). Without
+    // caching that's a burst of several near-simultaneous popen()/fork()
+    // calls layered on top of the real ffmpeg processes those same loads are
+    // about to spawn -- exactly the kind of contention that can make a fork()
+    // transiently fail and this check wrongly report "ffmpeg not found" for a
+    // perfectly good install. Once a check has actually succeeded, ffmpeg
+    // isn't going to vanish from PATH mid-run, so cache *success* only and
+    // serialize concurrent callers onto a single real check -- a genuine
+    // absence is still detected (and still rechecked) every time, since only
+    // `true` is ever cached.
+    static std::atomic<bool> cachedAvailable { false };
+    if (cachedAvailable.load(std::memory_order_acquire))
+        return true;
+
+    static std::mutex checkMutex;
+    std::lock_guard<std::mutex> lock(checkMutex);
+    if (cachedAvailable.load(std::memory_order_acquire))
+        return true; // another thread finished the real check while this one waited
+
     FILE* pipe = openPipe("ffmpeg -version", "r");
     if (pipe == nullptr)
         return false;
@@ -237,7 +321,12 @@ bool VideoExporter::isFfmpegAvailable()
     char buf[64];
     const bool gotOutput = fgets(buf, sizeof(buf), pipe) != nullptr;
     const int status = closePipe(pipe);
-    return gotOutput && exitedCleanly(status);
+    const bool available = gotOutput && exitedCleanly(status);
+
+    if (available)
+        cachedAvailable.store(true, std::memory_order_release);
+
+    return available;
 }
 
 void VideoExporter::run()
@@ -350,6 +439,11 @@ void VideoExporter::run()
         finishWith(Result::Failed, "Track has no audio to export.");
         return;
     }
+    // The final muxed output is capped to the shorter of the video/audio streams
+    // (-shortest below); the audio track always matches totalLength/sampleRate exactly,
+    // while the frame-quantized video track is always >= that, so this is the real
+    // rendered duration.
+    renderedDurationSeconds = (double) totalLength / sampleRate;
 
     // 2. Temp files for the two intermediate ffmpeg passes.
     auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);

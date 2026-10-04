@@ -13,6 +13,10 @@ public:
 
     static constexpr int numBands = 10;
 
+    // Center frequency of a real filter band, e.g. for UI that maps its own
+    // display bands onto these (see EqualizerComponent's 30-band view).
+    static float getFrequency(int bandIndex) { return frequencies[bandIndex]; }
+
     // Frequency band gains (in dB)
     void setGain(int bandIndex, float gainDb);
     float getGain(int bandIndex) const;
