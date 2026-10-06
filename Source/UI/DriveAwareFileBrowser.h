@@ -8,7 +8,8 @@
 class DriveAwareFileBrowser : public juce::FileBrowserComponent
 {
 public:
-    using juce::FileBrowserComponent::FileBrowserComponent;
+    DriveAwareFileBrowser(int flags, const juce::File& initialFileOrDirectory,
+                          const juce::FileFilter* fileFilter, juce::FilePreviewComponent* previewComp);
 
     void getRoots(juce::StringArray& rootNames, juce::StringArray& rootPaths) override;
 };
