@@ -346,6 +346,8 @@ set(SOUNDPLAYER_APP_SOURCES
     Source/UI/MidiInputMenu.cpp
     Source/UI/PlayerControlsComponent.h
     Source/UI/PlayerControlsComponent.cpp
+    Source/UI/DriveAwareFileBrowser.h
+    Source/UI/DriveAwareFileBrowser.cpp
     Source/UI/PlaylistEditorComponent.h
     Source/UI/PlaylistEditorComponent.cpp
     Source/UI/PluginChainComponent.h

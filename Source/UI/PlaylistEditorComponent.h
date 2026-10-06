@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Playlist/PlaylistManager.h"
+#include "DriveAwareFileBrowser.h"
 
 class PlaylistEditorComponent : public juce::Component,
                                public juce::ChangeListener,
@@ -40,6 +41,18 @@ private:
     std::unique_ptr<juce::TextButton> saveButton;
     std::unique_ptr<juce::TextButton> loadButton;
     std::unique_ptr<juce::FileChooser> fileChooser;
+
+    // Add Files uses its own browser/dialog (rather than juce::FileChooser) so it
+    // can list mounted drives alongside the default roots.
+    struct AddFilesDialog
+    {
+        AddFilesDialog(const juce::String& filters, const juce::File& startDir);
+
+        juce::WildcardFileFilter filter;
+        DriveAwareFileBrowser browser;
+        juce::FileChooserDialogBox dialogBox;
+    };
+    std::unique_ptr<AddFilesDialog> addFilesDialog;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PlaylistEditorComponent)
 };

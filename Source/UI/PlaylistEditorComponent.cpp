@@ -172,26 +172,50 @@ void PlaylistEditorComponent::addStreamFromDialog()
         true); // deleteWhenDismissed
 }
 
+PlaylistEditorComponent::AddFilesDialog::AddFilesDialog(const juce::String& filters, const juce::File& startDir)
+    : filter(filters, {}, {}),
+      browser(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                  | juce::FileBrowserComponent::canSelectMultipleItems,
+              startDir, &filter, nullptr),
+      dialogBox("Select audio files...", {}, browser, false,
+                browser.findColour(juce::AlertWindow::backgroundColourId))
+{
+}
+
 void PlaylistEditorComponent::addFilesFromDialog()
 {
-    fileChooser = std::make_unique<juce::FileChooser>(
-        "Select audio files...",
-        juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+    // JUCE's own browser rather than a native dialog: zenity 4.x (GTK4/libadwaita
+    // rewrite) has a known --file-filter regression that silently drops some
+    // extensions from a multi-pattern filter.
+    addFilesDialog = std::make_unique<AddFilesDialog>(
         "*.mp3;*.wav;*.flac;*.ogg;*.xtp;*.xtd;*.mod;*.xm;*.it;*.s3m;*.mptm;*.umx;*.ahx;*.ams;*.amf;*.med;*.mo3;*.mtm;*.okt;*.oct;*.stm;*.669;*.umf;*.drm;*.digi;*.far;*.mdl;*.mt2;*.dcm;*.dlm;*.ptm;*.pcm;*.dbm;*.dsm;*.cdm;*.hvl;*.c67;*.sfx;*.imf;*.u2b;*.psm;*.stp;*.symmod;"
         "*.mp4;*.mkv;*.avi;*.webm;*.mov;*.m4v;*.flv;*.wmv;*.mpg;*.mpeg;*.ts;*.ogv",
-        // zenity 4.x (GTK4/libadwaita rewrite) has a known --file-filter regression
-        // that silently drops some extensions from a multi-pattern filter, so use
-        // JUCE's own cross-platform browser instead of shelling out to it.
-        false);
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory));
 
-    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
-                                  | juce::FileBrowserComponent::canSelectMultipleItems,
-        [this](const juce::FileChooser& fc)
+    addFilesDialog->dialogBox.centreWithDefaultSize(nullptr);
+    addFilesDialog->dialogBox.enterModalState(true,
+        juce::ModalCallbackFunction::create([safeThis = juce::Component::SafePointer<PlaylistEditorComponent>(this)](int result)
         {
-            auto results = fc.getResults();
+            if (safeThis == nullptr || safeThis->addFilesDialog == nullptr)
+                return;
+
+            auto& browser = safeThis->addFilesDialog->browser;
+            juce::Array<juce::File> results;
+            if (result != 0)
+                for (int i = 0; i < browser.getNumSelectedFiles(); ++i)
+                    results.add(browser.getSelectedFile(i));
+
+            // Don't destroy the dialog from inside its own modal callback.
+            juce::MessageManager::callAsync([safeThis]
+            {
+                if (safeThis != nullptr)
+                    safeThis->addFilesDialog.reset();
+            });
+
             if (results.size() > 0)
-                playlistManager->addFiles(results);
-        });
+                safeThis->playlistManager->addFiles(results);
+        }),
+        false);
 }
 
 void PlaylistEditorComponent::savePlaylistDialog()
