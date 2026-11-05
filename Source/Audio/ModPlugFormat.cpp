@@ -98,14 +98,30 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
         double seekSecs = startSampleInFile / (double)kSampleRate;
         mod->set_position_seconds(seekSecs);
         currentSample = startSampleInFile;
+        publishPosition(true);
     }
 
-    // Decode into separate left/right float buffers
+    // Decode into separate left/right float buffers. Decoding goes in small
+    // pieces so a row change is pinned to within kPositionStep frames -- the
+    // pattern viewer scrolls smoothly from that, live and in video export
+    // (which decodes a whole video frame per call).
     decodeLeft.resize((size_t)numSamples);
     decodeRight.resize((size_t)numSamples);
 
-    std::size_t framesDecoded = mod->read(kSampleRate, (std::size_t)numSamples,
-                                          decodeLeft.data(), decodeRight.data());
+    constexpr int kPositionStep = 128;
+    std::size_t framesDecoded = 0;
+    while ((int)framesDecoded < numSamples)
+    {
+        const std::size_t want = (std::size_t)juce::jmin(kPositionStep, numSamples - (int)framesDecoded);
+        const std::size_t got = mod->read(kSampleRate, want,
+                                          decodeLeft.data() + framesDecoded,
+                                          decodeRight.data() + framesDecoded);
+        framesDecoded += got;
+        currentSample += (juce::int64)got;
+        publishPosition(false);
+        if (got < want)
+            break; // end of module
+    }
 
     // Zero the tail if end of module was reached
     if ((int)framesDecoded < numSamples)
@@ -124,18 +140,53 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
         std::memcpy(dst, channels[srcCh], (size_t)numSamples * sizeof(float));
     }
 
-    currentSample += (juce::int64)framesDecoded;
     return true;
 }
 
-int OpenMptAudioFormatReader::getCurrentRow() const
+void OpenMptAudioFormatReader::publishPosition(bool afterSeek)
 {
-    return mod ? mod->get_current_row() : -1;
+    const int row     = mod->get_current_row();
+    const int pattern = mod->get_current_pattern();
+    const int order   = mod->get_current_order();
+
+    const bool rowChanged = row != posRow.load() || pattern != posPattern.load() || order != posOrder.load();
+    if (afterSeek)
+    {
+        rowStartSample.store(-1);
+    }
+    else if (rowChanged)
+    {
+        const juce::int64 previousStart = rowStartSample.load();
+        const juce::int64 length = previousStart >= 0 ? currentSample - previousStart : 0;
+        if (length > 0 && length < (juce::int64)kSampleRate * 4)
+        {
+            rowLengthSamples.store(length);
+        }
+        else
+        {
+            // No previous row measured yet: classic tracker timing, 2.5/tempo s per tick.
+            const double tempo = mod->get_current_tempo2();
+            const int speed = mod->get_current_speed();
+            if (tempo > 0.0 && speed > 0)
+                rowLengthSamples.store((juce::int64)(speed * 2.5 / tempo * kSampleRate));
+        }
+        rowStartSample.store(currentSample);
+    }
+
+    decodedSample.store(currentSample);
+    posRow.store(row);
+    posPattern.store(pattern);
+    posOrder.store(order);
 }
 
-int OpenMptAudioFormatReader::getCurrentPattern() const
+double OpenMptAudioFormatReader::getCurrentRowFraction() const
 {
-    return mod ? mod->get_current_pattern() : -1;
+    const juce::int64 start = rowStartSample.load();
+    const juce::int64 length = rowLengthSamples.load();
+    if (start < 0 || length <= 0)
+        return 0.0;
+    const double fraction = (double)(decodedSample.load() - start) / (double)length;
+    return juce::jlimit(0.0, 0.999, fraction);
 }
 
 #endif // SOUNDPLAYER_OPENMPT_SUPPORT

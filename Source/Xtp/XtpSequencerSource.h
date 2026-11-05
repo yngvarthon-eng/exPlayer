@@ -49,6 +49,12 @@ public:
     // Live playback position for AudioEngine's UI poll. -1 if not yet dispatched.
     int getCurrentRow() const { return currentRowForUi.load(); }
     int getCurrentPatternIndex() const { return currentPatternForUi.load(); }
+    int getCurrentOrderPosition() const { return currentOrderForUi.load(); }
+    // How far into the current row rendering has got, 0..1, ticks plus the
+    // time into the current tick.
+    double getCurrentRowFraction() const { return rowFractionForUi.load(); }
+    // Length of the current row in seconds at the current tempo.
+    double getCurrentRowSeconds() const { return rowSecondsForUi.load(); }
 
 private:
     // xtp::NoteSink -- resolves (instrument, sample) to a voice. Current
@@ -66,6 +72,7 @@ private:
     void advanceOneTick();
     void advanceSongOrder();
     void renderChunk(int destOffset, int numSamples);
+    void publishRowFraction();
 
     xtp::Song song;
     juce::String loadError;
@@ -90,6 +97,9 @@ private:
 
     std::atomic<int> currentRowForUi { -1 };
     std::atomic<int> currentPatternForUi { -1 };
+    std::atomic<int> currentOrderForUi { -1 };
+    std::atomic<double> rowFractionForUi { 0.0 };
+    std::atomic<double> rowSecondsForUi { 0.0 };
 
     std::vector<float> monoScratch;
     std::vector<float> voiceScratch;

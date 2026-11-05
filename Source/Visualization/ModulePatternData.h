@@ -36,6 +36,22 @@ struct ModulePattern
     }
 };
 
+/**
+ * Where playback is in a module, as the pattern viewer needs it to scroll
+ * smoothly: whole row plus how far into it, and the song-order position so the
+ * viewer can show the neighbouring patterns.
+ */
+struct PatternPlayPosition
+{
+    int    pattern       = -1;
+    int    row           = -1;
+    double rowFraction   = 0.0;  // 0..1 through `row`
+    int    orderPosition = -1;   // index into ModulePatternData::getOrder(), -1 unknown
+    double rowSeconds    = 0.0;  // current row length (glide speed), 0 unknown
+
+    bool isValid() const { return pattern >= 0 && row >= 0; }
+};
+
 class ModulePatternData
 {
 public:
@@ -64,9 +80,17 @@ public:
 
     juce::String getTitle() const { return title; }
 
+    // Song order: pattern index per position, or kOrderSkip for a skipped
+    // entry ("+++", or an .xtp entry that names no pattern) and kOrderEnd for
+    // an end-of-song marker ("---").
+    static constexpr int kOrderSkip = -1;
+    static constexpr int kOrderEnd  = -2;
+    const std::vector<int>& getOrder() const { return order; }
+
 private:
     bool         loaded      = false;
     int          numChannels = 0;
     juce::String title;
     std::vector<ModulePattern> patterns;
+    std::vector<int> order;
 };

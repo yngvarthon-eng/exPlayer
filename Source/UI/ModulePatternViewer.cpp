@@ -1,5 +1,7 @@
 #include "ModulePatternViewer.h"
 
+#include <cmath>
+
 // ---- PatternGridComponent ----
 // Renders the tracker-style pattern grid.
 
@@ -29,10 +31,15 @@ public:
     // scrolling/clipping -- used for baked video export, which renders one
     // static frame per row and has no scrollbar. Never grows a column past
     // defaultChannelWidth.
-    void setPattern(const ModulePattern* pat, int patIndex, int fitWidth = -1)
+    //
+    // centeredHeight > 0 switches to the centered view: the component is
+    // exactly that tall and paints its rows around viewRow (see setViewRow())
+    // instead of laying the whole pattern out for the viewport to scroll.
+    void setPattern(const ModulePattern* pat, int patIndex, int fitWidth = -1, int centeredHeight = -1)
     {
         pattern      = pat;
         patternIndex = patIndex;
+        centered     = centeredHeight > 0;
 
         if (pat != nullptr && pat->numChannels > 0)
         {
@@ -41,23 +48,65 @@ public:
                                 (fitWidth - rowNumWidth) / pat->numChannels)
                 : defaultChannelWidth;
             setSize(rowNumWidth + pat->numChannels * channelWidth,
-                    headerHeight + pat->numRows * rowHeight);
+                    centered ? centeredHeight : headerHeight + pat->numRows * rowHeight);
         }
         else
         {
             channelWidth = defaultChannelWidth;
-            setSize(rowNumWidth, headerHeight + 10);
+            setSize(rowNumWidth, centered ? centeredHeight : headerHeight + 10);
         }
 
+        if (pat != nullptr)
+            viewRow = juce::jlimit(0.0, (double) juce::jmax(0, pat->numRows - 1), viewRow);
         repaint();
     }
 
+    // Patterns drawn dimmed above row 0 / below the last row in the centered
+    // view (song-order neighbours); nullptr for none.
+    void setGhostPatterns(const ModulePattern* before, const ModulePattern* after)
+    {
+        if (ghostBefore == before && ghostAfter == after) return;
+        ghostBefore = before;
+        ghostAfter  = after;
+        if (centered) repaint();
+    }
+
+    // Page view: the playing row, kept visible by scrolling the viewport.
     void setCurrentRow(int row)
     {
         if (currentRow == row) return;
         currentRow = row;
         repaint();
-        scrollToRow(row);
+        if (! centered)
+            scrollToRow(row);
+    }
+
+    // Centered view: the (fractional) row on the center line. `following`
+    // draws the play band there; otherwise only a faint marker line.
+    void setViewRow(double row, bool following)
+    {
+        if (row == viewRow && following == followingPlayback) return;
+        viewRow = row;
+        followingPlayback = following;
+        if (centered) repaint();
+    }
+
+    double getViewRow() const { return viewRow; }
+    bool isFollowingPlayback() const { return followingPlayback; }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+    {
+        // The centered view scrolls its own rows (while not following
+        // playback); sideways scrolling still goes to the viewport.
+        if (! centered || std::abs(wheel.deltaX) > std::abs(wheel.deltaY) || pattern == nullptr)
+        {
+            Component::mouseWheelMove(e, wheel);
+            return;
+        }
+        if (followingPlayback) return;
+        setViewRow(juce::jlimit(0.0, (double) juce::jmax(0, pattern->numRows - 1),
+                                std::round(viewRow - wheel.deltaY * 16.0)),
+                   false);
     }
 
     void paint(juce::Graphics& g) override
@@ -66,6 +115,12 @@ public:
 
         if (pattern == nullptr)
             return;
+
+        if (centered)
+        {
+            paintCentered(g);
+            return;
+        }
 
         auto clip = g.getClipBounds();
 
@@ -77,10 +132,78 @@ public:
                                   (clip.getBottom() - headerHeight) / rowHeight + 1);
 
         for (int r = firstRow; r <= lastRow; ++r)
-            paintRow(g, r);
+            paintRow(g, r, *pattern, r, headerHeight + r * rowHeight, false);
+
+        if (currentRow >= 0 && currentRow < pattern->numRows)
+            paintPlayBand(g, headerHeight + currentRow * rowHeight, currentRow);
     }
 
 private:
+    double centerRowTop() const
+    {
+        return headerHeight + (getHeight() - headerHeight - rowHeight) / 2.0;
+    }
+
+    // Centered view: rows are placed relative to viewRow, so they run past
+    // both ends of the pattern; those rows come from the ghost patterns.
+    void paintCentered(juce::Graphics& g)
+    {
+        const double centerTop = centerRowTop();
+        const int numRows = pattern->numRows;
+        const int firstRow = (int) std::floor(viewRow - (centerTop - headerHeight) / rowHeight) - 1;
+        const int lastRow  = (int) std::ceil(viewRow + (getHeight() - centerTop) / rowHeight) + 1;
+        const int beforeRows = ghostBefore != nullptr ? ghostBefore->numRows : 0;
+        const int afterRows  = ghostAfter  != nullptr ? ghostAfter->numRows  : 0;
+
+        {
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(0, headerHeight, getWidth(), getHeight() - headerHeight);
+
+            for (int r = juce::jmax(firstRow, -beforeRows); r <= juce::jmin(lastRow, numRows - 1 + afterRows); ++r)
+            {
+                const int y = juce::roundToInt(centerTop + (r - viewRow) * rowHeight);
+                if (r < 0)
+                    paintRow(g, r, *ghostBefore, beforeRows + r, y, true);
+                else if (r >= numRows)
+                    paintRow(g, r, *ghostAfter, r - numRows, y, true);
+                else
+                    paintRow(g, r, *pattern, r, y, false);
+            }
+
+            const int bandY = juce::roundToInt(centerTop);
+            if (followingPlayback)
+            {
+                paintPlayBand(g, bandY, currentRow);
+            }
+            else
+            {
+                g.setColour(playColour.withAlpha(0.4f));
+                g.drawRect(rowNumWidth, bandY, getWidth() - rowNumWidth, rowHeight + 1, 1);
+            }
+        }
+
+        paintHeader(g);
+    }
+
+    // Playing row: a translucent orange band, drawn over the cells, plus a
+    // highlighted row number (as exTracker draws it).
+    void paintPlayBand(juce::Graphics& g, int y, int row)
+    {
+        g.setColour(playColour.withAlpha(0.22f));
+        g.fillRect(rowNumWidth, y, getWidth() - rowNumWidth, rowHeight);
+        g.setColour(playColour);
+        g.drawRect(rowNumWidth, y, getWidth() - rowNumWidth, rowHeight + 1, 2);
+        g.fillRect(0, y, rowNumWidth, rowHeight + 1);
+
+        if (row >= 0)
+        {
+            g.setColour(juce::Colours::black);
+            g.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), 10.5f, juce::Font::bold));
+            g.drawText(juce::String(row).paddedLeft('0', 3), 2, y, rowNumWidth - 4,
+                       rowHeight, juce::Justification::centredLeft);
+        }
+    }
+
     void paintHeader(juce::Graphics& g)
     {
         g.setColour(headerBgColor);
@@ -114,39 +237,44 @@ private:
         g.drawHorizontalLine(headerHeight - 1, 0.0f, (float)getWidth());
     }
 
-    void paintRow(juce::Graphics& g, int row)
+    // Paints row `shownRow` of `source` at y. `ghost` rows belong to a
+    // neighbouring pattern and are dimmed; `row` is unused beyond that.
+    void paintRow(juce::Graphics& g, int row, const ModulePattern& source, int shownRow, int y, bool ghost)
     {
-        if (pattern == nullptr) return;
-
-        int  y         = headerHeight + row * rowHeight;
-        bool isCurrent = (row == currentRow);
-        bool isBeat    = (row % 4 == 0);
+        juce::ignoreUnused(row);
+        const bool isBeat = (shownRow % 4 == 0);
 
         // Background
-        if (isCurrent)
-            g.setColour(currentRowBg);
-        else if (isBeat)
+        if (isBeat)
             g.setColour(beatRowBg);
         else
-            g.setColour((row % 2 == 0) ? rowEvenBg : rowOddBg);
+            g.setColour((shownRow % 2 == 0) ? rowEvenBg : rowOddBg);
         g.fillRect(0, y, getWidth(), rowHeight);
 
         g.setFont(juce::Font(juce::Font::getDefaultMonospacedFontName(), 10.5f, juce::Font::plain));
 
         // Row number
-        g.setColour(isCurrent ? juce::Colours::white : rowNumColor);
-        g.drawText(juce::String(row).paddedLeft('0', 3), 2, y, rowNumWidth - 4,
+        g.setColour(rowNumColor);
+        g.drawText(juce::String(shownRow).paddedLeft('0', 3), 2, y, rowNumWidth - 4,
                    rowHeight, juce::Justification::centredLeft);
 
-        // Channel cells
-        for (int c = 0; c < pattern->numChannels; ++c)
+        // Channel cells (a ghost pattern may have fewer channels)
+        const int channels = pattern != nullptr ? juce::jmin(source.numChannels, pattern->numChannels)
+                                                : source.numChannels;
+        for (int c = 0; c < channels; ++c)
         {
             int x = rowNumWidth + c * channelWidth;
 
             g.setColour(separatorColor);
             g.drawVerticalLine(x - 1, (float)y, (float)(y + rowHeight));
 
-            paintCell(g, pattern->at(row, c), x, y);
+            paintCell(g, source.at(shownRow, c), x, y);
+        }
+
+        if (ghost)
+        {
+            g.setColour(bgColor.withAlpha(0.65f));
+            g.fillRect(0, y, getWidth(), rowHeight);
         }
     }
 
@@ -232,9 +360,14 @@ private:
     }
 
     const ModulePattern* pattern = nullptr;
+    const ModulePattern* ghostBefore = nullptr;
+    const ModulePattern* ghostAfter  = nullptr;
     int patternIndex = 0;
     int currentRow   = -1;
     int channelWidth = defaultChannelWidth;
+    bool centered = false;
+    double viewRow = 0.0;
+    bool followingPlayback = false;
 
     // Dark tracker colour scheme
     const juce::Colour bgColor        { 0xff141420 };
@@ -243,7 +376,7 @@ private:
     const juce::Colour rowEvenBg      { 0xff141420 };
     const juce::Colour rowOddBg       { 0xff181828 };
     const juce::Colour beatRowBg      { 0xff1e1e32 };
-    const juce::Colour currentRowBg   { 0xff1e3a6e };
+    const juce::Colour playColour     { 0xffff7a1a };
     const juce::Colour separatorColor { 0xff252540 };
     const juce::Colour rowNumColor    { 0xff556677 };
     const juce::Colour emptyColor     { 0xff303050 };
@@ -266,6 +399,12 @@ ModulePatternViewer::ModulePatternViewer()
     patternLabel->setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(*patternLabel);
 
+    viewButton = std::make_unique<juce::TextButton>();
+    viewButton->setTooltip("Center: the playing row stays on the middle line and the pattern scrolls under it.\n"
+                           "Page: the whole pattern scrolls to keep the playing row in view.");
+    viewButton->onClick = [this] { setCenteredView(! centeredView); };
+    addAndMakeVisible(*viewButton);
+
     prevButton = std::make_unique<juce::TextButton>("<");
     prevButton->onClick = [this] { showPattern(currentPatternIndex - 1); };
     addAndMakeVisible(*prevButton);
@@ -283,10 +422,14 @@ ModulePatternViewer::ModulePatternViewer()
     grid     = std::make_unique<PatternGridComponent>();
     viewport = std::make_unique<juce::Viewport>();
     viewport->setViewedComponent(grid.get(), false);
-    viewport->setScrollBarsShown(true, true);
+    viewport->setScrollBarsShown(! centeredView, true);
     viewport->setVisible(false);
     addAndMakeVisible(*viewport);
 
+    // Glides the centered view once per display frame while playing.
+    vblank = std::make_unique<juce::VBlankAttachment>(this, [this] { animateFrame(); });
+
+    updateViewButton();
     updateNavButtons();
 }
 
@@ -296,6 +439,9 @@ void ModulePatternViewer::setPatternData(const ModulePatternData* data)
 {
     patternData         = data;
     currentPatternIndex = 0;
+    gliding             = false;
+    grid->setGhostPatterns(nullptr, nullptr);
+    grid->setViewRow(0.0, false);
 
 #ifdef SOUNDPLAYER_OPENMPT_SUPPORT
     if (data != nullptr && data->isLoaded() && data->getNumPatterns() > 0)
@@ -324,6 +470,8 @@ void ModulePatternViewer::setPatternData(const ModulePatternData* data)
 void ModulePatternViewer::setCurrentRow(int row)
 {
     grid->setCurrentRow(row);
+    if (! gliding)
+        grid->setViewRow(row, false);
 }
 
 void ModulePatternViewer::setFitChannelsToWidth(bool shouldFit)
@@ -331,16 +479,66 @@ void ModulePatternViewer::setFitChannelsToWidth(bool shouldFit)
     fitChannelsToWidth = shouldFit;
     // No scrollbar needed once every channel is made to fit -- and hiding it
     // stops it from stealing width the fit calculation is counting on.
-    viewport->setScrollBarsShown(!shouldFit, !shouldFit);
+    viewport->setScrollBarsShown(! shouldFit && ! centeredView, ! shouldFit);
     refitGrid();
+}
+
+void ModulePatternViewer::setCenteredView(bool shouldCenter)
+{
+    if (centeredView == shouldCenter) return;
+    centeredView = shouldCenter;
+    viewport->setScrollBarsShown(! fitChannelsToWidth && ! centeredView, ! fitChannelsToWidth);
+    viewport->setViewPosition(viewport->getViewPositionX(), 0);
+    updateViewButton();
+    refitGrid();
+}
+
+void ModulePatternViewer::updateViewButton()
+{
+    viewButton->setButtonText(centeredView ? "View: Center" : "View: Page");
 }
 
 void ModulePatternViewer::refitGrid()
 {
     if (patternData == nullptr || !patternData->isLoaded()) return;
 
+    const auto* pattern = patternData->getPattern(currentPatternIndex);
     const int fitWidth = fitChannelsToWidth ? viewport->getWidth() : -1;
-    grid->setPattern(patternData->getPattern(currentPatternIndex), currentPatternIndex, fitWidth);
+
+    int centeredHeight = -1;
+    if (centeredView)
+    {
+        // The centered view scrolls its rows itself, so the grid is exactly as
+        // tall as the viewport, less the horizontal scrollbar when it shows.
+        const int width = pattern != nullptr && pattern->numChannels > 0 && fitWidth <= 0
+            ? PatternGridComponent::rowNumWidth + pattern->numChannels * PatternGridComponent::defaultChannelWidth
+            : 0;
+        const bool horizontalBar = ! fitChannelsToWidth && width > viewport->getWidth();
+        centeredHeight = juce::jmax(PatternGridComponent::headerHeight + PatternGridComponent::rowHeight,
+                                    viewport->getHeight() - (horizontalBar ? viewport->getScrollBarThickness() : 0));
+    }
+
+    grid->setPattern(pattern, currentPatternIndex, fitWidth, centeredHeight);
+}
+
+void ModulePatternViewer::updateGhostPatterns(int orderPosition)
+{
+    if (patternData == nullptr) return;
+
+    // Only when the order position really is the shown pattern -- not while
+    // the user browses other patterns with < and >.
+    const auto& order = patternData->getOrder();
+    const ModulePattern* before = nullptr;
+    const ModulePattern* after  = nullptr;
+    if (orderPosition >= 0 && orderPosition < (int) order.size()
+        && order[(size_t) orderPosition] == currentPatternIndex)
+    {
+        for (int o = orderPosition - 1; o >= 0 && order[(size_t) o] != ModulePatternData::kOrderEnd; --o)
+            if (order[(size_t) o] >= 0) { before = patternData->getPattern(order[(size_t) o]); break; }
+        for (int o = orderPosition + 1; o < (int) order.size() && order[(size_t) o] != ModulePatternData::kOrderEnd; ++o)
+            if (order[(size_t) o] >= 0) { after = patternData->getPattern(order[(size_t) o]); break; }
+    }
+    grid->setGhostPatterns(before, after);
 }
 
 void ModulePatternViewer::setPlaybackPosition(int patternIndex, int row)
@@ -348,7 +546,88 @@ void ModulePatternViewer::setPlaybackPosition(int patternIndex, int row)
     if (patternIndex >= 0 && patternIndex != currentPatternIndex)
         showPattern(patternIndex);
     if (row >= 0)
-        grid->setCurrentRow(row);
+        setCurrentRow(row);
+}
+
+void ModulePatternViewer::setPlaybackPosition(const PatternPlayPosition& position, bool isPlaying)
+{
+    if (! position.isValid())
+    {
+        playing = false;
+        return;
+    }
+
+    const bool patternChanged = position.pattern != currentPatternIndex;
+    if (patternChanged)
+        showPattern(position.pattern);
+    updateGhostPatterns(position.orderPosition);
+    grid->setCurrentRow(position.row);
+
+    const double measured = position.row + position.rowFraction;
+    const bool moved = patternChanged || std::abs(measured - measuredRow) > 1e-6;
+    playing = isPlaying;
+    if (moved)
+    {
+        measuredRow  = measured;
+        measuredAtMs = juce::Time::getMillisecondCounterHiRes();
+    }
+    if (position.rowSeconds > 0.0)
+        rowSeconds = position.rowSeconds;
+
+    if (! playing)
+    {
+        // Stopped/paused: rest on the whole row; leave a wheel-scrolled view
+        // alone until playback moves.
+        gliding = false;
+        if (moved || grid->isFollowingPlayback())
+            grid->setViewRow(position.row, false);
+    }
+}
+
+void ModulePatternViewer::setExactPlaybackPosition(const PatternPlayPosition& position)
+{
+    if (! position.isValid()) return;
+    if (position.pattern != currentPatternIndex)
+        showPattern(position.pattern);
+    updateGhostPatterns(position.orderPosition);
+    grid->setCurrentRow(position.row);
+    grid->setViewRow(position.row + position.rowFraction, true);
+}
+
+void ModulePatternViewer::animateFrame()
+{
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    const double frameMs = nowMs - lastFrameMs;
+    lastFrameMs = nowMs;
+
+    if (! playing || ! centeredView || ! isShowing())
+    {
+        gliding = false;
+        return;
+    }
+
+    // Where playback is now: the last poll plus the time since, at the row
+    // length (capped so a stalled poll can't run the view far ahead).
+    const double rowMs = rowSeconds > 0.0 ? rowSeconds * 1000.0 : 0.0;
+    const double ahead = rowMs > 0.0 ? juce::jmin((nowMs - measuredAtMs) / rowMs, 1.5) : 0.0;
+    const double target = measuredRow + ahead;
+
+    double viewRow = grid->getViewRow();
+    if (! gliding)
+    {
+        gliding = true;
+        viewRow = target;
+    }
+    else
+    {
+        // Glide at the tempo and pull gently toward the measured position, so
+        // polls that land a little late don't make the rows stutter. Jumps
+        // (pattern change, seek, position-jump effects) snap.
+        const double predicted = viewRow + (rowMs > 0.0 ? frameMs / rowMs : 0.0);
+        const double error = target - predicted;
+        viewRow = std::abs(error) > 2.0 ? target : predicted + error * 0.2;
+    }
+    grid->setViewRow(viewRow, true);
 }
 
 void ModulePatternViewer::showPattern(int index)
@@ -359,6 +638,7 @@ void ModulePatternViewer::showPattern(int index)
     if (numPats == 0) return;
 
     currentPatternIndex = juce::jlimit(0, numPats - 1, index);
+    grid->setGhostPatterns(nullptr, nullptr);
     refitGrid();
 
     auto title = patternData->getTitle();
@@ -399,6 +679,8 @@ void ModulePatternViewer::resized()
     prevButton->setBounds(bar.removeFromRight(26));
     bar.removeFromRight(6);
     patternLabel->setBounds(bar.removeFromRight(110));
+    bar.removeFromRight(4);
+    viewButton->setBounds(bar.removeFromRight(96));
     bar.removeFromRight(4);
     titleLabel->setBounds(bar);
 

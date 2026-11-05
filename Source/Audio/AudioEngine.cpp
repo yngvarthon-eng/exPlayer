@@ -1078,6 +1078,31 @@ int AudioEngine::getCurrentPatternIndex() const
     return -1;
 }
 
+PatternPlayPosition AudioEngine::getPatternPlayPosition() const
+{
+    PatternPlayPosition pos;
+#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+    if (openMptReader != nullptr)
+    {
+        pos.pattern       = openMptReader->getCurrentPattern();
+        pos.row           = openMptReader->getCurrentRow();
+        pos.rowFraction   = openMptReader->getCurrentRowFraction();
+        pos.orderPosition = openMptReader->getCurrentOrder();
+        pos.rowSeconds    = openMptReader->getCurrentRowSeconds();
+        return pos;
+    }
+#endif
+    if (xtpSource != nullptr)
+    {
+        pos.pattern       = xtpSource->getCurrentPatternIndex();
+        pos.row           = xtpSource->getCurrentRow();
+        pos.rowFraction   = xtpSource->getCurrentRowFraction();
+        pos.orderPosition = xtpSource->getCurrentOrderPosition();
+        pos.rowSeconds    = xtpSource->getCurrentRowSeconds();
+    }
+    return pos;
+}
+
 // ---- ChangeListener ----
 
 void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster*)

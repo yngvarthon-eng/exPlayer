@@ -3,6 +3,7 @@
 #if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -22,13 +23,31 @@ public:
     bool readSamples(int* const* destSamples, int numDestChannels, int startOffsetInDestBuffer,
                      juce::int64 startSampleInFile, int numSamples) override;
 
-    // Live playback position (called from GUI thread — safe for display purposes)
-    int getCurrentRow()     const;
-    int getCurrentPattern() const;
+    // Live playback position, as of the last decoded sample. Published through
+    // atomics from readSamples(), so safe to call from any thread.
+    int getCurrentRow()     const { return posRow.load(); }
+    int getCurrentPattern() const { return posPattern.load(); }
+    int getCurrentOrder()   const { return posOrder.load(); }
+
+    // How far decoding has got into the current row, 0..1 (never reaches 1).
+    // Measured from the sample where decoding crossed into the row, over the
+    // length of the previous row (or speed/tempo before one has been measured).
+    double getCurrentRowFraction() const;
+
+    // Length of the current row in seconds (estimate), 0 if unknown.
+    double getCurrentRowSeconds() const { return (double) rowLengthSamples.load() / kSampleRate; }
 
 private:
+    void publishPosition(bool afterSeek);
+
     std::unique_ptr<openmpt::module> mod;
     juce::int64 currentSample = 0;
+
+    // Position published for the GUI / video export (see publishPosition()).
+    std::atomic<int> posRow { -1 }, posPattern { -1 }, posOrder { -1 };
+    std::atomic<juce::int64> decodedSample { 0 };     // == currentSample
+    std::atomic<juce::int64> rowStartSample { -1 };   // -1: row start not seen (after a seek)
+    std::atomic<juce::int64> rowLengthSamples { 0 };
 
     // Per-channel float decode buffers (non-interleaved)
     std::vector<float> decodeLeft, decodeRight;

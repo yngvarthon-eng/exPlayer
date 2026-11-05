@@ -4,6 +4,7 @@
 #include "../Playlist/PlaylistManager.h"
 #include "../Audio/AudioEngine.h"
 #include "../Audio/MultiChannelAudioFormatReaderSource.h"
+#include "../Audio/ModPlugFormat.h"
 #include "../Effects/Equalizer.h"
 #include "../Xtp/XtpSong.h"
 #include "../Xtp/XtpSequencer.h"
@@ -636,6 +637,145 @@ void testXtpSequencerRowJump()
 
     std::cout << std::endl;
 }
+
+void testXtpPlayPositionForPatternViewer()
+{
+    std::cout << "=== Testing Xtp play position (row fraction, song order) ===" << std::endl;
+
+    // Two 2-row patterns played in order 0, 1 -- the pattern viewer's centered
+    // view needs the fraction into each row and the song-order position.
+    juce::File songFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("sp2_xtp_play_position_test.xtp");
+    songFile.replaceWithText(
+        "EXTRACKER_SONG_V1 2 1 2 2 0 0\n"
+        "PATTERN 0\n"
+        "0 0 1 60 0 65535 0 100 0 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "PATTERN 1\n"
+        "0 0 1 62 0 65535 0 100 0 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "SONG_ORDER 0 1\n"
+        "TRANSPORT 120 4 4\n");
+
+    XtpSequencerSource source(songFile, XtpSequencerSource::kRenderSampleRate);
+    if (!source.isValid())
+        throw std::runtime_error("play-position fixture did not load: " + source.getLoadError().toStdString());
+    source.prepareToPlay(64, XtpSequencerSource::kRenderSampleRate);
+    source.setNextReadPosition(0);
+
+    ModulePatternData data;
+    if (!data.loadFromXtpSong(source.getSong()) || data.getOrder() != std::vector<int> { 0, 1 })
+        throw std::runtime_error("ModulePatternData did not take the .xtp song order");
+    std::cout << "✓ ModulePatternData carries the song order" << std::endl;
+
+    // 120 BPM, 4 ticks/beat, 4 ticks/row: 0.125 s per tick, 0.5 s per row.
+    juce::AudioBuffer<float> buffer(2, 64);
+    double lastPosition = -1.0;
+    bool sawOrder1 = false;
+    for (int block = 0; block < (int) (1.9 * XtpSequencerSource::kRenderSampleRate / 64); ++block)
+    {
+        juce::AudioSourceChannelInfo info(&buffer, 0, 64);
+        source.getNextAudioBlock(info);
+
+        const int order = source.getCurrentOrderPosition();
+        const double fraction = source.getCurrentRowFraction();
+        if (fraction < 0.0 || fraction >= 1.0)
+            throw std::runtime_error("row fraction out of range: " + std::to_string(fraction));
+        if (std::abs(source.getCurrentRowSeconds() - 0.5) > 1e-6)
+            throw std::runtime_error("row length should be 0.5 s, got " + std::to_string(source.getCurrentRowSeconds()));
+
+        // Song position in rows: order * 2 + row + fraction, rising steadily.
+        const double songPosition = order * 2 + source.getCurrentRow() + fraction;
+        const double expected = (block + 1) * 64 / XtpSequencerSource::kRenderSampleRate / 0.5;
+        if (songPosition < lastPosition - 1e-9 || std::abs(songPosition - expected) > 0.02)
+            throw std::runtime_error("position " + std::to_string(songPosition) + " at block " + std::to_string(block)
+                                     + ", expected " + std::to_string(expected));
+        lastPosition = songPosition;
+        sawOrder1 = sawOrder1 || (order == 1 && source.getCurrentPatternIndex() == 1);
+    }
+    if (!sawOrder1)
+        throw std::runtime_error("never reached song order position 1");
+    std::cout << "✓ Row + fraction tracks the rendered time through both patterns" << std::endl;
+    std::cout << "✓ Song-order position follows the pattern change" << std::endl;
+
+    songFile.deleteFile();
+    std::cout << std::endl;
+}
+
+#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+void testOpenMptPlayPositionForPatternViewer()
+{
+    std::cout << "=== Testing libopenmpt play position (row fraction, song order) ===" << std::endl;
+
+    // A minimal 4-channel ProTracker MOD, no samples: two 64-row patterns
+    // played in order 0, 1 at the default speed 6 / tempo 125 = 0.12 s per row.
+    juce::MemoryOutputStream mod;
+    mod.writeRepeatedByte(0, 20);              // title
+    for (int i = 0; i < 31; ++i)
+    {
+        mod.writeRepeatedByte(0, 22 + 2 + 1); // name, length, finetune
+        mod.writeByte(64);                    // volume
+        mod.writeRepeatedByte(0, 4);          // loop start/length
+    }
+    mod.writeByte(2);                          // song length
+    mod.writeByte(127);                        // restart
+    mod.writeByte(0);
+    mod.writeByte(1);
+    mod.writeRepeatedByte(0, 126);             // rest of the order list
+    mod.write("M.K.", 4);
+    mod.writeRepeatedByte(0, 2 * 64 * 4 * 4);  // two empty patterns
+
+    juce::File modFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("sp2_openmpt_play_position_test.mod");
+    modFile.replaceWithData(mod.getData(), mod.getDataSize());
+
+    ModulePatternData data;
+    if (!data.loadFromFile(modFile) || data.getOrder().size() < 2
+        || data.getOrder()[0] != 0 || data.getOrder()[1] != 1)
+        throw std::runtime_error("ModulePatternData did not read the MOD order list");
+    std::cout << "✓ ModulePatternData reads the module's order list" << std::endl;
+
+    OpenMptAudioFormat format;
+    std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(new juce::FileInputStream(modFile), true));
+    auto* openMpt = dynamic_cast<OpenMptAudioFormatReader*>(reader.get());
+    if (openMpt == nullptr)
+        throw std::runtime_error("MOD fixture did not open through libopenmpt");
+
+    const double rate = reader->sampleRate;
+    constexpr int kBlock = 1600; // one 30 fps video frame at 48 kHz, as VideoExporter decodes
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    juce::int64 position = 0;
+    double lastPosition = -1.0;
+    bool sawOrder1 = false;
+    while (position < (juce::int64) (14.0 * rate))
+    {
+        reader->read(&buffer, 0, kBlock, position, true, true);
+        position += kBlock;
+
+        const double fraction = openMpt->getCurrentRowFraction();
+        if (fraction < 0.0 || fraction >= 1.0)
+            throw std::runtime_error("row fraction out of range: " + std::to_string(fraction));
+
+        const int order = openMpt->getCurrentOrder();
+        const double songPosition = order * 64 + openMpt->getCurrentRow() + fraction;
+        const double expected = position / rate / 0.12;
+        // Row changes are pinned to 128 frames (~0.02 rows) by the reader.
+        if (songPosition < lastPosition - 1e-9 || std::abs(songPosition - expected) > 0.05)
+            throw std::runtime_error("position " + std::to_string(songPosition) + " at "
+                                     + std::to_string(position / rate) + " s, expected " + std::to_string(expected));
+        lastPosition = songPosition;
+        sawOrder1 = sawOrder1 || (order == 1 && openMpt->getCurrentPattern() == 1);
+    }
+    if (!sawOrder1)
+        throw std::runtime_error("never reached order position 1");
+    std::cout << "✓ Row + fraction tracks the decoded time, per video-frame-sized read" << std::endl;
+    std::cout << "✓ Order position follows the pattern change" << std::endl;
+
+    reader.reset();
+    modFile.deleteFile();
+    std::cout << std::endl;
+}
+#endif
 
 void testXtpSequencerChannelVolume()
 {
@@ -1667,6 +1807,10 @@ int main()
         testXtpSongParsing();
         testXtpSequencerMissingSampleFile();
         testXtpSequencerRowJump();
+        testXtpPlayPositionForPatternViewer();
+#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+        testOpenMptPlayPositionForPatternViewer();
+#endif
         testXtpSequencerChannelVolume();
         testXtpUnifiedSampleInstrument();
         testVideoExporter();

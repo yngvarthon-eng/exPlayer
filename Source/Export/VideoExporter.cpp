@@ -389,15 +389,26 @@ void VideoExporter::run()
         source = std::make_unique<MultiChannelAudioFormatReaderSource>(reader, true);
     }
 
-    auto getCurrentRowPattern = [&]() -> std::pair<int, int> // {pattern, row}
+    auto getCurrentPlayPosition = [&]() -> PatternPlayPosition
     {
+        PatternPlayPosition pos;
         if (xtpPtr != nullptr)
-            return { xtpPtr->getCurrentPatternIndex(), xtpPtr->getCurrentRow() };
+        {
+            pos.pattern       = xtpPtr->getCurrentPatternIndex();
+            pos.row           = xtpPtr->getCurrentRow();
+            pos.rowFraction   = xtpPtr->getCurrentRowFraction();
+            pos.orderPosition = xtpPtr->getCurrentOrderPosition();
+        }
 #ifdef SOUNDPLAYER_OPENMPT_SUPPORT
-        if (openMptReaderPtr != nullptr)
-            return { openMptReaderPtr->getCurrentPattern(), openMptReaderPtr->getCurrentRow() };
+        else if (openMptReaderPtr != nullptr)
+        {
+            pos.pattern       = openMptReaderPtr->getCurrentPattern();
+            pos.row           = openMptReaderPtr->getCurrentRow();
+            pos.rowFraction   = openMptReaderPtr->getCurrentRowFraction();
+            pos.orderPosition = openMptReaderPtr->getCurrentOrder();
+        }
 #endif
-        return { -1, -1 };
+        return pos;
     };
 
     // Frame layout, computed once: which rectangle(s) the pattern grid and/or the
@@ -547,8 +558,9 @@ void VideoExporter::run()
 
             if (!gridBounds.isEmpty() && patternViewer != nullptr)
             {
-                const auto patternRow = getCurrentRowPattern();
-                patternViewer->setPlaybackPosition(patternRow.first, patternRow.second);
+                // Exact position each frame (no live glide): the decoders pin row
+                // changes to a few ms, so the centered view scrolls smoothly.
+                patternViewer->setExactPlaybackPosition(getCurrentPlayPosition());
 
                 juce::Image gridImage(juce::Image::ARGB, gridBounds.getWidth(), gridBounds.getHeight(), true);
                 juce::Graphics gg(gridImage);

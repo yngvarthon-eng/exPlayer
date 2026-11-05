@@ -376,9 +376,8 @@ void MainComponent::timerCallback()
 {
     if (patternViewer->isVisible())
     {
-        int patIdx = audioEngine->getCurrentPatternIndex();
-        int row    = audioEngine->getCurrentPatternRow();
-        patternViewer->setPlaybackPosition (patIdx, row);
+        patternViewer->setPlaybackPosition (audioEngine->getPatternPlayPosition(),
+                                            audioEngine->isPlaying());
     }
 
     // Both exporters poll rather than call back -- see their controllers for why.

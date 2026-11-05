@@ -231,6 +231,8 @@ void XtpSequencerSource::seekToSampleZero()
 
     currentRowForUi.store(0);
     currentPatternForUi.store(currentPatternIndex);
+    currentOrderForUi.store(song.songOrder.empty() ? -1 : 0);
+    publishRowFraction();
 
     // Row 0 fires immediately at t=0, before any tick has elapsed -- matches
     // exTracker's own behavior (the sequencer dispatches whatever row the
@@ -286,6 +288,16 @@ void XtpSequencerSource::advanceOneTick()
 
     currentRowForUi.store(transport.row());
     currentPatternForUi.store(currentPatternIndex);
+    currentOrderForUi.store(song.songOrder.empty() ? -1 : songOrderPosition);
+}
+
+void XtpSequencerSource::publishRowFraction()
+{
+    const double tickSeconds = transport.secondsUntilNextTick();
+    const int ticksPerRow = juce::jmax(1, transport.ticksPerRow_());
+    const double intoTick = tickSeconds > 0.0 ? juce::jlimit(0.0, 0.999, tickTimeAccumulator / tickSeconds) : 0.0;
+    rowFractionForUi.store(juce::jlimit(0.0, 0.999, ((double) transport.ticksIntoRow() + intoTick) / ticksPerRow));
+    rowSecondsForUi.store(tickSeconds * ticksPerRow);
 }
 
 void XtpSequencerSource::prepareToPlay(int, double) {}
@@ -339,6 +351,7 @@ void XtpSequencerSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& i
             advanceOneTick();
         }
     }
+    publishRowFraction();
 
     for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
     {
@@ -391,4 +404,5 @@ void XtpSequencerSource::setNextReadPosition(juce::int64 newPosition)
         }
     }
     suppressAudibleDispatch = false;
+    publishRowFraction();
 }

@@ -134,6 +134,8 @@ public:
     // Live playback position within the module (returns -1 if not applicable)
     int getCurrentPatternRow()   const;
     int getCurrentPatternIndex() const;
+    // Row, fraction into the row and song-order position, for smooth scrolling.
+    PatternPlayPosition getPatternPlayPosition() const;
 
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,

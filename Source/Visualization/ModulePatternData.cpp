@@ -12,6 +12,7 @@ void ModulePatternData::clear()
     numChannels = 0;
     title       = {};
     patterns.clear();
+    order.clear();
 }
 
 bool ModulePatternData::loadFromFile(const juce::File& file)
@@ -82,6 +83,19 @@ bool ModulePatternData::loadFromFile(const juce::File& file)
                 dst.effect = juce::String(ef + ep);
             }
         }
+    }
+
+    const int numOrders = mod->get_num_orders();
+    order.reserve((size_t)numOrders);
+    for (int o = 0; o < numOrders; ++o)
+    {
+        // Ask libopenmpt which entries are "+++" (skip) and "---" (stop): the
+        // raw pattern values for them differ by format (0xFE/0xFF in
+        // MOD/S3M/IT, 0xFFFE/0xFFFF in MPTM).
+        const int p = mod->get_order_pattern(o);
+        if (mod->is_order_skip_entry(o))      order.push_back(kOrderSkip);
+        else if (mod->is_order_stop_entry(o)) order.push_back(kOrderEnd);
+        else order.push_back(p >= 0 && p < numPats ? p : kOrderSkip);
     }
 
     loaded = !patterns.empty();
@@ -161,6 +175,10 @@ bool ModulePatternData::loadFromXtpSong(const xtp::Song& song)
             }
         }
     }
+
+    order.reserve(song.songOrder.size());
+    for (int p : song.songOrder)
+        order.push_back(p >= 0 && p < (int) patterns.size() ? p : kOrderSkip);
 
     loaded = !patterns.empty();
     return loaded;
