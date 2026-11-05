@@ -43,9 +43,10 @@ void FullScreenWindowController::openVisualizer()
     // dispatched, so resetting from inside it cannot delete the window mid-event.
     visualizerWindow = std::make_unique<FullScreenVisualizerWindow>(
         &audioEngine, &playlistManager, visualizer.getActivePluginIndex(),
-        [this] { visualizerWindow.reset(); });
+        [this] { visualizerWindow.reset(); updateMainVisualizerAnimation(); });
 
     visualizerWindow->show();
+    updateMainVisualizerAnimation();
 }
 
 void FullScreenWindowController::openPatternViewer()
@@ -80,6 +81,7 @@ void FullScreenWindowController::openPatternViewer()
     patternWindow->setBottomBar(std::move(transport), FullScreenTransportBar::preferredHeight);
 
     patternWindow->show();
+    updateMainVisualizerAnimation();
 }
 
 void FullScreenWindowController::closePatternViewer()
@@ -90,6 +92,13 @@ void FullScreenWindowController::closePatternViewer()
 void FullScreenWindowController::resetPatternWindow()
 {
     patternWindow.reset();
+    updateMainVisualizerAnimation();
+}
+
+void FullScreenWindowController::updateMainVisualizerAnimation()
+{
+    visualizer.setAnimationSuspended(visualizerWindow != nullptr || patternWindow != nullptr
+                                     || videoWindow != nullptr);
 }
 
 void FullScreenWindowController::openVideo()
@@ -101,12 +110,14 @@ void FullScreenWindowController::openVideo()
     // all keyboard shortcuts.
     videoWindow = std::make_unique<FullScreenHostWindow>(
         videoPreview, &audioEngine, &playlistManager,
-        [this] { videoWindow.reset(); }, true);
+        [this] { videoWindow.reset(); updateMainVisualizerAnimation(); }, true);
 
     videoWindow->show();
+    updateMainVisualizerAnimation();
 }
 
 void FullScreenWindowController::closeVideo()
 {
     videoWindow.reset();
+    updateMainVisualizerAnimation();
 }

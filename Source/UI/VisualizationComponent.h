@@ -28,6 +28,10 @@ public:
     // embedded view it mirrors.
     void setActivePluginIndex(int index);
 
+    // Stops (true) or restarts (false) the ~25 fps analysis and repaint, e.g.
+    // while a fullscreen window covers this view and nobody can see it.
+    void setAnimationSuspended(bool suspended);
+
     // Digit-key shortcut: '1'-'9' selects that tab directly, as an alternative
     // to clicking it. Returns true if `key` was a digit that selected a tab.
     bool handleDigitHotkey(const juce::KeyPress& key);

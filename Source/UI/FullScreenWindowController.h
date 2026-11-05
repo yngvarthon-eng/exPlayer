@@ -62,6 +62,10 @@ private:
     // Drops the sequencer window.
     void resetPatternWindow();
 
+    // The main window's visualizer is hidden behind any fullscreen window, so
+    // it's paused while one is open (the fullscreen views run their own).
+    void updateMainVisualizerAnimation();
+
     // The sequencer view's side panel (SequencerSidePanel) is rebuilt on every
     // opening; these carry its toggles over from one opening to the next.
     int   sequencerPanelSections;

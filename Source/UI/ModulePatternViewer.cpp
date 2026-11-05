@@ -1,6 +1,8 @@
 #include "ModulePatternViewer.h"
 
 #include <cmath>
+#include <map>
+#include <tuple>
 
 // ---- PatternGridComponent ----
 // Renders the tracker-style pattern grid.
@@ -60,6 +62,10 @@ public:
             viewRow = juce::jlimit(0.0, (double) juce::jmax(0, pat->numRows - 1), viewRow);
         repaint();
     }
+
+    // Forget every cached row image. Needed when another module is loaded:
+    // its patterns can reuse the old ones' addresses.
+    void clearRowCache() { rowCache.clear(); }
 
     // Patterns drawn dimmed above row 0 / below the last row in the centered
     // view (song-order neighbours); nullptr for none.
@@ -132,10 +138,11 @@ public:
                                   (clip.getBottom() - headerHeight) / rowHeight + 1);
 
         for (int r = firstRow; r <= lastRow; ++r)
-            paintRow(g, r, *pattern, r, headerHeight + r * rowHeight, false);
+            paintRowCached(g, *pattern, r, headerHeight + r * rowHeight, false);
 
         if (currentRow >= 0 && currentRow < pattern->numRows)
             paintPlayBand(g, headerHeight + currentRow * rowHeight, currentRow);
+        evictUnusedRows();
     }
 
 private:
@@ -163,11 +170,11 @@ private:
             {
                 const int y = juce::roundToInt(centerTop + (r - viewRow) * rowHeight);
                 if (r < 0)
-                    paintRow(g, r, *ghostBefore, beforeRows + r, y, true);
+                    paintRowCached(g, *ghostBefore, beforeRows + r, y, true);
                 else if (r >= numRows)
-                    paintRow(g, r, *ghostAfter, r - numRows, y, true);
+                    paintRowCached(g, *ghostAfter, r - numRows, y, true);
                 else
-                    paintRow(g, r, *pattern, r, y, false);
+                    paintRowCached(g, *pattern, r, y, false);
             }
 
             const int bandY = juce::roundToInt(centerTop);
@@ -183,6 +190,7 @@ private:
         }
 
         paintHeader(g);
+        evictUnusedRows();
     }
 
     // Playing row: a translucent orange band, drawn over the cells, plus a
@@ -216,9 +224,12 @@ private:
 
         if (pattern != nullptr)
         {
+            const auto clip = g.getClipBounds();
             for (int c = 0; c < pattern->numChannels; ++c)
             {
                 int x = rowNumWidth + c * channelWidth;
+                if (x + channelWidth < clip.getX() || x > clip.getRight())
+                    continue; // scrolled out of view
 
                 if (channelWidth >= 44)
                     g.drawText("Ch " + juce::String(c + 1), x + 4, 0, channelWidth - 8,
@@ -237,11 +248,89 @@ private:
         g.drawHorizontalLine(headerHeight - 1, 0.0f, (float)getWidth());
     }
 
-    // Paints row `shownRow` of `source` at y. `ghost` rows belong to a
-    // neighbouring pattern and are dimmed; `row` is unused beyond that.
-    void paintRow(juce::Graphics& g, int row, const ModulePattern& source, int shownRow, int y, bool ghost)
+    // Rows are drawn once into an image and then copied while the view
+    // scrolls: laying out ~4 text fields per channel per row on every frame
+    // cost ~17-25 ms at fullscreen size, more than a 60 Hz frame has. A row's
+    // image covers only the horizontally visible part of the grid, at the
+    // display's pixel scale; scrolling sideways, resizing or a scale change
+    // starts the cache afresh.
+    void paintRowCached(juce::Graphics& g, const ModulePattern& source, int shownRow, int y, bool ghost)
     {
-        juce::ignoreUnused(row);
+        auto visible = getLocalBounds();
+        if (auto* vp = findParentComponentOfClass<juce::Viewport>())
+            visible = vp->getViewArea();
+        const int x0 = juce::jmax(0, visible.getX());
+        const int w  = juce::jmin(getWidth(), visible.getRight()) - x0;
+        if (w <= 0) return;
+
+        const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+        if (x0 != cacheX || w != cacheWidth || scale != cacheScale || channelWidth != cacheChannelWidth)
+        {
+            rowCache.clear();
+            cacheX = x0; cacheWidth = w; cacheScale = scale; cacheChannelWidth = channelWidth;
+        }
+
+        const auto& image = rowImage(source, shownRow, ghost, x0, w, scale);
+        if (scale == 1.0f)
+            g.drawImageAt(image, x0, y);
+        else
+            g.drawImageTransformed(image, juce::AffineTransform::scale(1.0f / scale).translated((float) x0, (float) y));
+    }
+
+    // The cached image of a row, made on first use. A dimmed (ghost) row is
+    // made from the plain one -- an image copy plus a fill, no text layout --
+    // and keeps the plain one alive, so the next pattern's rows are ready when
+    // it takes over from the current one.
+    const juce::Image& rowImage(const ModulePattern& source, int shownRow, bool ghost, int x0, int w, float scale)
+    {
+        const RowKey key { &source, shownRow, ghost };
+        auto it = rowCache.find(key);
+        if (it == rowCache.end())
+        {
+            juce::Image img;
+            if (ghost)
+            {
+                img = rowImage(source, shownRow, false, x0, w, scale).createCopy();
+                juce::Graphics ig(img);
+                ig.setColour(bgColor.withAlpha(0.65f));
+                ig.fillAll();
+            }
+            else
+            {
+                img = juce::Image(juce::Image::RGB, juce::jmax(1, juce::roundToInt((float) w * scale)),
+                                  juce::jmax(1, juce::roundToInt((float) rowHeight * scale)), false);
+                juce::Graphics ig(img);
+                ig.addTransform(juce::AffineTransform::translation((float) -x0, 0.0f).scaled(scale));
+                renderRow(ig, source, shownRow, 0, false);
+            }
+            it = rowCache.emplace(key, CachedRow { img, false }).first;
+        }
+        else if (ghost)
+        {
+            if (auto plain = rowCache.find(RowKey { &source, shownRow, false }); plain != rowCache.end())
+                plain->second.used = true;
+        }
+        it->second.used = true;
+        return it->second.image;
+    }
+
+    // Drops rows the last paint didn't draw (scrolled away), so the cache
+    // holds about one screenful.
+    void evictUnusedRows()
+    {
+        for (auto it = rowCache.begin(); it != rowCache.end();)
+        {
+            if (! it->second.used) { it = rowCache.erase(it); continue; }
+            it->second.used = false;
+            ++it;
+        }
+    }
+
+    // Paints row `shownRow` of `source` at y. `ghost` rows belong to a
+    // neighbouring pattern and are dimmed. Channels outside the clip are
+    // skipped.
+    void renderRow(juce::Graphics& g, const ModulePattern& source, int shownRow, int y, bool ghost)
+    {
         const bool isBeat = (shownRow % 4 == 0);
 
         // Background
@@ -261,7 +350,10 @@ private:
         // Channel cells (a ghost pattern may have fewer channels)
         const int channels = pattern != nullptr ? juce::jmin(source.numChannels, pattern->numChannels)
                                                 : source.numChannels;
-        for (int c = 0; c < channels; ++c)
+        const auto clip = g.getClipBounds();
+        const int firstChannel = juce::jmax(0, (clip.getX() - rowNumWidth) / juce::jmax(1, channelWidth));
+        const int lastChannel  = juce::jmin(channels - 1, (clip.getRight() - rowNumWidth) / juce::jmax(1, channelWidth));
+        for (int c = firstChannel; c <= lastChannel; ++c)
         {
             int x = rowNumWidth + c * channelWidth;
 
@@ -359,6 +451,19 @@ private:
         }
     }
 
+    struct RowKey
+    {
+        const ModulePattern* source; int row; bool ghost;
+        bool operator<(const RowKey& o) const
+        {
+            return std::tie(source, row, ghost) < std::tie(o.source, o.row, o.ghost);
+        }
+    };
+    struct CachedRow { juce::Image image; bool used; };
+    std::map<RowKey, CachedRow> rowCache;
+    int   cacheX = -1, cacheWidth = -1, cacheChannelWidth = -1;
+    float cacheScale = 0.0f;
+
     const ModulePattern* pattern = nullptr;
     const ModulePattern* ghostBefore = nullptr;
     const ModulePattern* ghostAfter  = nullptr;
@@ -439,6 +544,7 @@ void ModulePatternViewer::setPatternData(const ModulePatternData* data)
 {
     patternData         = data;
     currentPatternIndex = 0;
+    grid->clearRowCache();
     gliding             = false;
     grid->setGhostPatterns(nullptr, nullptr);
     grid->setViewRow(0.0, false);
