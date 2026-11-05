@@ -59,5 +59,14 @@ private:
     std::unique_ptr<FullScreenHostWindow> patternWindow;
     std::unique_ptr<FullScreenHostWindow> videoWindow;
 
+    // Drops the sequencer window.
+    void resetPatternWindow();
+
+    // The sequencer view's side panel (SequencerSidePanel) is rebuilt on every
+    // opening; these carry its toggles over from one opening to the next.
+    int   sequencerPanelSections;
+    bool  sequencerPanelShown = true;
+    float sequencerPanelShare;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FullScreenWindowController)
 };

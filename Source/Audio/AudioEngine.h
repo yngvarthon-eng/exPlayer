@@ -144,6 +144,12 @@ public:
     // Row, fraction into the row and song-order position, for smooth scrolling.
     PatternPlayPosition getPatternPlayPosition() const;
 
+    // Per-channel output levels of the playing module (peak since the last
+    // call, ~0..1), for the fullscreen sequencer's scopes. Returns the number
+    // of channels written to `levels`; 0 when the current track can't report
+    // them (not a module, or an .xtp song).
+    int takeModuleChannelLevels(std::vector<float>& levels);
+
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
                                           int numInputChannels,

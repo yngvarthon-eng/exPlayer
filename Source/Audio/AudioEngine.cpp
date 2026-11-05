@@ -1142,6 +1142,21 @@ PatternPlayPosition AudioEngine::getPatternPlayPosition() const
     return pos;
 }
 
+int AudioEngine::takeModuleChannelLevels(std::vector<float>& levels)
+{
+#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+    if (openMptReader != nullptr)
+    {
+        levels.resize((size_t) OpenMptAudioFormatReader::kMaxLevelChannels);
+        const int n = openMptReader->takeChannelPeaks(levels.data(), (int) levels.size());
+        levels.resize((size_t) n);
+        return n;
+    }
+#endif
+    levels.clear();
+    return 0;
+}
+
 // ---- ChangeListener ----
 
 void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster*)

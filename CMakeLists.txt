@@ -345,11 +345,29 @@ set(SOUNDPLAYER_APP_SOURCES
     Source/UI/AudioQualitySelector.h
     Source/UI/AudioQualitySelector.cpp
     Source/UI/FullScreenHostWindow.h
+    Source/UI/ReservesTopRightCorner.h
     Source/UI/FullScreenHostWindow.cpp
     Source/UI/FullScreenVisualizerWindow.h
     Source/UI/FullScreenVisualizerWindow.cpp
     Source/UI/FullScreenWindowController.h
     Source/UI/FullScreenWindowController.cpp
+    Source/UI/SequencerSidePanel.h
+    Source/UI/SequencerSidePanel.cpp
+    Source/UI/ChannelActivityComponent.h
+    Source/UI/ChannelActivityComponent.cpp
+    Source/UI/PianoRollComponent.h
+    Source/UI/PianoRollComponent.cpp
+    Source/UI/TrackInfoComponent.h
+    Source/UI/TrackInfoComponent.cpp
+    Source/UI/SequencerPanelStyle.h
+    Source/UI/InstrumentNamesComponent.h
+    Source/UI/InstrumentNamesComponent.cpp
+    Source/UI/SongMessageComponent.h
+    Source/UI/SongMessageComponent.cpp
+    Source/UI/ChannelScopesComponent.h
+    Source/UI/ChannelScopesComponent.cpp
+    Source/UI/FullScreenTransportBar.h
+    Source/UI/FullScreenTransportBar.cpp
     Source/UI/MainToolbar.h
     Source/UI/MainToolbar.cpp
     Source/UI/MidiInputMenu.h

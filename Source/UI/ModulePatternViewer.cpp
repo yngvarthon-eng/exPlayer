@@ -493,6 +493,13 @@ void ModulePatternViewer::setCenteredView(bool shouldCenter)
     refitGrid();
 }
 
+void ModulePatternViewer::setTopRightReserve(int width)
+{
+    if (topRightReserve == width) return;
+    topRightReserve = width;
+    resized();
+}
+
 void ModulePatternViewer::updateViewButton()
 {
     viewButton->setButtonText(centeredView ? "View: Center" : "View: Page");
@@ -674,6 +681,7 @@ void ModulePatternViewer::resized()
     auto area = getLocalBounds().reduced(1);
 
     auto bar = area.removeFromTop(barH).reduced(4, 3);
+    bar.removeFromRight(topRightReserve);
     nextButton->setBounds(bar.removeFromRight(26));
     bar.removeFromRight(2);
     prevButton->setBounds(bar.removeFromRight(26));

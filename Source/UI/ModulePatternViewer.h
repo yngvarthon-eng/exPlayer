@@ -2,10 +2,12 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Visualization/ModulePatternData.h"
+#include "ReservesTopRightCorner.h"
 
 class PatternGridComponent;
 
-class ModulePatternViewer : public juce::Component
+class ModulePatternViewer : public juce::Component,
+                            public ReservesTopRightCorner
 {
 public:
     ModulePatternViewer();
@@ -40,10 +42,16 @@ public:
     // Whole-row position only (no glide).
     void setPlaybackPosition(int patternIndex, int row);
 
+    // Leaves room at the right end of the toolbar for the fullscreen window's
+    // Exit button.
+    void setTopRightReserve(int width) override;
+
     void paint(juce::Graphics&) override;
     void resized() override;
 
 private:
+    int topRightReserve = 0;
+
     void showPattern(int index);
     void updateNavButtons();
     void updateViewButton();

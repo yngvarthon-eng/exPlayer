@@ -3,6 +3,7 @@
 #if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -37,6 +38,13 @@ public:
     // Length of the current row in seconds (estimate), 0 if unknown.
     double getCurrentRowSeconds() const { return (double) rowLengthSamples.load() / kSampleRate; }
 
+    // Per-channel output level (libopenmpt's channel VU, ~0..1) -- the
+    // highest seen since the last call, which resets it, so a short hit
+    // between two GUI polls isn't lost. Fills up to maxChannels entries of
+    // dest; returns how many channels the module has (capped the same way).
+    static constexpr int kMaxLevelChannels = 128;
+    int takeChannelPeaks(float* dest, int maxChannels);
+
 private:
     void publishPosition(bool afterSeek);
 
@@ -48,6 +56,10 @@ private:
     std::atomic<juce::int64> decodedSample { 0 };     // == currentSample
     std::atomic<juce::int64> rowStartSample { -1 };   // -1: row start not seen (after a seek)
     std::atomic<juce::int64> rowLengthSamples { 0 };
+
+    void publishChannelLevels();
+    int numModuleChannels = 0;
+    std::array<std::atomic<float>, kMaxLevelChannels> channelPeaks {};
 
     // Per-channel float decode buffers (non-interleaved)
     std::vector<float> decodeLeft, decodeRight;

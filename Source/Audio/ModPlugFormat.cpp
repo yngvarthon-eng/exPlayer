@@ -55,6 +55,7 @@ OpenMptAudioFormatReader::OpenMptAudioFormatReader(juce::InputStream* stream,
     try
     {
         mod = std::make_unique<openmpt::module>(fileData, std::cerr);
+        numModuleChannels = mod->get_num_channels();
     }
     catch (const openmpt::exception&)
     {
@@ -119,6 +120,7 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
         framesDecoded += got;
         currentSample += (juce::int64)got;
         publishPosition(false);
+        publishChannelLevels();
         if (got < want)
             break; // end of module
     }
@@ -141,6 +143,26 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
     }
 
     return true;
+}
+
+void OpenMptAudioFormatReader::publishChannelLevels()
+{
+    const int n = juce::jmin(numModuleChannels, kMaxLevelChannels);
+    for (int c = 0; c < n; ++c)
+    {
+        const float level = juce::jmax(mod->get_current_channel_vu_left(c), mod->get_current_channel_vu_right(c));
+        auto& peak = channelPeaks[(size_t) c];
+        float seen = peak.load(std::memory_order_relaxed);
+        while (level > seen && ! peak.compare_exchange_weak(seen, level, std::memory_order_relaxed)) {}
+    }
+}
+
+int OpenMptAudioFormatReader::takeChannelPeaks(float* dest, int maxChannels)
+{
+    const int n = juce::jmin(numModuleChannels, kMaxLevelChannels);
+    for (int c = 0; c < juce::jmin(n, maxChannels); ++c)
+        dest[c] = channelPeaks[(size_t) c].exchange(0.0f, std::memory_order_relaxed);
+    return n;
 }
 
 void OpenMptAudioFormatReader::publishPosition(bool afterSeek)
