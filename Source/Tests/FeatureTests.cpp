@@ -17,6 +17,7 @@
 #include "../Video/FfmpegVideoFrameDecoder.h"
 #include "../Video/SubtitleTrack.h"
 #include "../Audio/FfmpegVideoAudioFormatReader.h"
+#include "../Playlist/AudioFileCollector.h"
 #include <thread>
 #include <chrono>
 
@@ -1514,6 +1515,36 @@ void testFfmpegVideoFrameDecoder()
     std::cout << std::endl;
 }
 
+// Drag and drop runs every dropped path through AudioFileCollector. Video
+// files are playable, so a drop must accept them just like audio files.
+void testAudioFileCollectorAcceptsVideo()
+{
+    std::cout << "=== Testing AudioFileCollector drop filter ===" << std::endl;
+
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile("sp2_collector_test_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+    dir.createDirectory();
+
+    for (auto name : { "song.mp3", "clip.mp4", "movie.MKV", "tune.xm", "notes.txt" })
+        dir.getChildFile(name).create();
+
+    auto collected = AudioFileCollector::collect(juce::StringArray { dir.getFullPathName() });
+
+    juce::StringArray names;
+    for (const auto& f : collected)
+        names.add(f.getFileName());
+
+    assert(names.contains("song.mp3"));
+    assert(names.contains("clip.mp4"));
+    assert(names.contains("movie.MKV"));
+    assert(names.contains("tune.xm"));
+    assert(! names.contains("notes.txt"));
+    assert(AudioFileCollector::isSupported(dir.getChildFile("clip.mp4")));
+
+    dir.deleteRecursively();
+    std::cout << "✓ Drop filter accepts audio, module and video files\n" << std::endl;
+}
+
 int main()
 {
     std::cout << "\n════════════════════════════════════════" << std::endl;
@@ -1543,6 +1574,7 @@ int main()
         testFfmpegVideoAudioFormatReaderSequentialRead();
         testFfmpegVideoAudioFormatReaderSeek();
         testFfmpegVideoFrameDecoder();
+        testAudioFileCollectorAcceptsVideo();
 
         std::cout << "════════════════════════════════════════" << std::endl;
         std::cout << "  ✅ All tests passed!" << std::endl;

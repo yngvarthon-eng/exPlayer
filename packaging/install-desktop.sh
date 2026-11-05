@@ -4,6 +4,7 @@
 #   - symlinks ~/.local/bin/soundplayer2 to the newest local build artifact
 #   - installs the app icon, .desktop launcher and module MIME types
 #   - registers SoundPlayer2 as the default handler for its audio types
+#     (and for video types too when run with --video)
 #
 # No sudo required. Re-run after switching build directories or moving the repo.
 
@@ -35,7 +36,17 @@ MIME_TYPES=(
     audio/x-soundplayer2-module
     audio/x-mod audio/x-xm audio/x-it audio/x-s3m
     audio/x-extracker-xtp
+    audio/mp4 audio/x-m4a audio/aiff audio/x-aiff
 )
+# Video types are listed in the .desktop file, so SoundPlayer2 shows up under
+# "Open With", but are only made the default with --video.
+VIDEO_MIME_TYPES=(
+    video/mp4 video/x-matroska video/webm video/x-msvideo video/quicktime
+    video/x-m4v video/x-flv video/x-ms-wmv video/mpeg video/mp2t video/ogg
+)
+if [[ "${1:-}" == "--video" ]]; then
+    MIME_TYPES+=("${VIDEO_MIME_TYPES[@]}")
+fi
 
 latest_mtime=0
 for candidate in "${CANDIDATES[@]}"; do
