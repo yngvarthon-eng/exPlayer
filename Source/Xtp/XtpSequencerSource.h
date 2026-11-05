@@ -51,13 +51,16 @@ public:
     int getCurrentPatternIndex() const { return currentPatternForUi.load(); }
 
 private:
-    // xtp::NoteSink -- resolves (instrument, sample) to a voice using the same
-    // priority order as exTracker's PluginHost::triggerNoteOnResolved.
+    // xtp::NoteSink -- resolves (instrument, sample) to a voice. Current
+    // exTracker plays only the note's instrument; the sample-column and
+    // same-numbered-bank fallbacks reproduce what its load-time migration
+    // (migrateSampleReferences) does for older songs.
     void noteOn(std::uint8_t instrument, std::uint16_t sample, int midiNote,
                std::uint8_t velocity, bool retrigger) override;
     void noteOff(std::uint8_t instrument, std::uint16_t sample, int midiNote) override;
 
     xtp::InstrumentVoice* resolveVoice(std::uint8_t instrument, std::uint16_t sample);
+    int offsetNote(std::uint8_t instrument, std::uint16_t sample, int midiNote) const;
     void buildInstrumentVoices();
     void seekToSampleZero();
     void advanceOneTick();
@@ -74,7 +77,8 @@ private:
     xtp::TransportClock transport;
     xtp::Sequencer sequencer;
 
-    std::array<std::unique_ptr<xtp::InstrumentVoice>, 16> instrumentVoices;
+    std::array<std::unique_ptr<xtp::InstrumentVoice>, xtp::Song::kInstrumentSlots> instrumentVoices;
+    std::array<int, xtp::Song::kInstrumentSlots> instrumentNoteOffset {}; // rounded INSTRUMENT_PITCH
     std::map<int, std::unique_ptr<xtp::InstrumentVoice>> sampleVoices;
 
     int songOrderPosition = 0;

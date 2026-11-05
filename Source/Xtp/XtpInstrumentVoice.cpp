@@ -142,6 +142,20 @@ bool SampleVoice::loadSample(const juce::File& file)
     return true;
 }
 
+void SampleVoice::setParameter(const std::string& name, double value)
+{
+    if (name == "gain")
+        gain = std::clamp(value, 0.0, 2.0);
+    else if (name == "sample_root")
+        rootMidiNote = (int) std::clamp(value, 0.0, 127.0);
+    else if (name == "loop_mode")
+        loopMode = (int) std::clamp(value, 0.0, 3.0);
+    else if (name == "loop_start")
+        loopStart = (std::size_t) std::max(value, 0.0);
+    else if (name == "loop_end")
+        loopEnd = value <= 0.0 ? std::numeric_limits<std::size_t>::max() : (std::size_t) value;
+}
+
 void SampleVoice::noteOn(int midiNote, std::uint8_t velocity, bool retrigger)
 {
     if (mono.empty() || sampleRate <= 0.0)
@@ -198,6 +212,9 @@ void SampleVoice::renderAdd(std::vector<float>& monoBuffer, double outputSampleR
     const double baseStep = sampleRate / outputSampleRate;
     const double releaseStep = 1.0 / std::max(outputSampleRate * 0.03, 1.0);
     const std::size_t sampleSize = mono.size();
+    const std::size_t loopEndEff = (loopEnd != std::numeric_limits<std::size_t>::max() && loopEnd <= sampleSize)
+        ? loopEnd : sampleSize;
+    const std::size_t loopStartEff = (loopStart < loopEndEff) ? loopStart : 0;
 
     for (std::size_t frame = 0; frame < monoBuffer.size(); ++frame)
     {
@@ -208,6 +225,25 @@ void SampleVoice::renderAdd(std::vector<float>& monoBuffer, double outputSampleR
         {
             if (!v.active)
                 continue;
+
+            if (loopMode == 1 || (loopMode == 3 && !v.releasing))
+            {
+                if (v.pos >= (double) loopEndEff)
+                    v.pos = (double) loopStartEff;
+            }
+            else if (loopMode == 2)
+            {
+                if (v.direction > 0.0 && v.pos >= (double) loopEndEff)
+                {
+                    v.pos = (double) (loopEndEff > 0 ? loopEndEff - 1 : 0);
+                    v.direction = -1.0;
+                }
+                else if (v.direction < 0.0 && v.pos < (double) loopStartEff)
+                {
+                    v.pos = (double) loopStartEff;
+                    v.direction = 1.0;
+                }
+            }
 
             if (v.pos < 0.0)
                 v.pos = 0.0;
@@ -228,7 +264,7 @@ void SampleVoice::renderAdd(std::vector<float>& monoBuffer, double outputSampleR
                 v.envelope = 1.0;
 
             mixed += sampleValue * v.level * v.envelope;
-            v.pos += baseStep * v.pitchRatio; // one-shot: no loop wrap
+            v.pos += baseStep * v.pitchRatio * v.direction;
             if (v.envelope <= 0.0)
                 v.active = false;
             ++activeCount;

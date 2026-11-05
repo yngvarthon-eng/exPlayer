@@ -24,8 +24,8 @@ struct Step
 
     bool hasNote = false;
     int note = -1;                  // MIDI note number; -1 with hasNote=true means note-off ("^^^")
-    std::uint8_t instrument = 0;    // instrument slot 0-15, or (if sample is unset) a legacy sample-slot index >= 16
-    std::uint16_t sample = 0xFFFF;  // sample bank slot 0-256; 0xFFFF = unset, fall back to instrument
+    std::uint8_t instrument = 0;    // instrument slot 0-255
+    std::uint16_t sample = 0xFFFF;  // legacy sample bank slot 0-256 (pre-unified-instruments songs); 0xFFFF = unset
     std::uint32_t gateTicks = 0;    // note length in ticks; 0 = sustain until interrupted
     std::uint8_t velocity = 100;    // 1-127
     bool retrigger = false;
@@ -68,16 +68,43 @@ public:
     // predates this feature.
     std::vector<float> channelVolume;
 
+    // CHANNEL_MUTED flags and CHANNEL_TRACKS groups. A muted channel, or a
+    // channel in a muted track, plays nothing; a track's volume scales every
+    // channel in it. See channelGain().
+    std::vector<bool> channelMuted;
+    struct Track { int first = 0; int last = 0; bool muted = false; float volume = 1.0f; };
+    std::vector<Track> tracks;
+
+    // Effective per-channel velocity multiplier: channel volume x track volume
+    // (exTracker's ChannelManager::effectiveVolume).
+    std::vector<float> channelGains() const;
+    // True for channels that play nothing: muted, or in a muted track
+    // (exTracker's !ChannelManager::isAudible, ignoring solo, which isn't saved).
+    std::vector<bool> channelSilenced() const;
+
     double tempoBpm = 125.0;
     int ticksPerBeat = 6;
     int ticksPerRow = 6;
 
-    // Instrument slot 0-15 -> plugin id string ("builtin.sine", "builtin.square",
+    // Instrument slot 0-255 -> plugin id string ("builtin.sine", "builtin.square",
     // "builtin.sample", "sf2:<path>", "sfz:<path>", "lv2:<uri>", ...), empty = unassigned.
     // Slots 0 and 1 default to builtin.sine/builtin.square, matching exTracker's own
     // runtime startup state (main.cpp assigns these before any file is loaded), which a
     // file only overrides if it has its own INSTRUMENT_ASSIGN for that slot.
-    std::array<juce::String, 16> instruments;
+    static constexpr int kInstrumentSlots = 256; // exTracker's kInstrumentSlotCount
+    std::array<juce::String, kInstrumentSlots> instruments;
+
+    // Sample instrument -> the bank slot it plays (INSTR_SAMPLE_SLOT). Since
+    // exTracker's "unified instruments" a note plays only its instrument; a
+    // builtin.sample instrument gets its audio through this link.
+    std::map<int, int> instrumentSampleSlot;
+
+    // Per-instrument plugin parameters (INSTRUMENT_PARAM), e.g. a sample
+    // instrument's gain / sample_root / loop_mode / loop_start / loop_end.
+    std::map<int, std::map<std::string, double>> instrumentParams;
+
+    // Per-instrument transpose in semitones (INSTRUMENT_PITCH), 0 if absent.
+    std::map<int, float> instrumentPitch;
 
     // Sample bank slot (0-256) -> entry, populated from SAMPLE_ENTRY/SAMPLE_BANK tokens.
     std::map<int, SampleEntry> samples;

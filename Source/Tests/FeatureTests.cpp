@@ -20,6 +20,8 @@
 #include "../Playlist/AudioFileCollector.h"
 #include <thread>
 #include <chrono>
+#include <stdexcept>
+#include <string>
 
 void testPlaylistManager()
 {
@@ -810,6 +812,106 @@ namespace
 // FeatureTests.cpp is built with NDEBUG defined, which makes assert() a complete
 // no-op -- including never evaluating its argument -- so assert(sideEffectingCall())
 // would silently skip the call entirely rather than just skip the check.
+// Songs saved by current exTracker ("unified instruments"): notes name an
+// instrument slot (0-255) whose builtin.sample is linked to a bank slot by
+// INSTR_SAMPLE_SLOT, with no per-note sample column. These used to load with
+// no voice for the instrument and play silence.
+void testXtpUnifiedSampleInstrument()
+{
+    std::cout << "=== Testing Xtp sample instruments (exTracker unified instruments) ===" << std::endl;
+
+    juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                         .getChildFile("sp2_xtp_unified_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+    dir.getChildFile("song_samples").createDirectory();
+    writeTestToneWav(dir.getChildFile("song_samples/slot_003_tone.wav"), 48000.0, 1.0);
+
+    // 2 rows x 3 channels. Ch 0: note on instrument 20. Ch 1: muted channel.
+    // Ch 2: inside a muted track.
+    juce::String content =
+        "EXTRACKER_SONG_V1 2 3 1 1 0 0\n"
+        "PATTERN 0\n"
+        "0 0 1 60 20 65535 0 100 1 0 0\n"
+        "0 1 1 64 20 65535 0 100 1 0 0\n"
+        "0 2 1 67 20 65535 0 100 1 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "1 1 0 -1 0 65535 0 100 0 0 0\n"
+        "1 2 0 -1 0 65535 0 100 0 0 0\n"
+        "SONG_ORDER 0\n"
+        "PATTERN_SWING 50\n"
+        "INSERT_SWING_INHERIT 0\n"
+        "ROW_EDIT_SCOPE 0\n"
+        "TRANSPORT 125 6 6\n"
+        "MIDI_MAP -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1\n"
+        "MIDI_TRANSPORT 1500 0\n"
+        "INSTRUMENT_NAME 20 \"Tone SONG_ORDER 3\"\n"
+        "INSTRUMENT_ASSIGN 20 \"builtin.sample\"\n"
+        "INSTRUMENT_PARAM 20 gain 0.5\n"
+        "INSTRUMENT_PARAM 20 sample_root 60\n"
+        "INSTRUMENT_PARAM 20 loop_mode 1\n"
+        "INSTRUMENT_FILTER 20 1 0.5 0.2\n"
+        "INSTRUMENT_PITCH 20 12\n"
+        "SAMPLE_ENTRY 3 \"tone\" \"song_samples/slot_003_tone.wav\"\n"
+        "INSTR_SAMPLE_SLOT 20 3\n"
+        "MODULE_MESSAGE \"hi\"\n"
+        "CHANNEL_MUTED 0 1 0\n"
+        "CHANNEL_VOLUME 100 100 100\n"
+        "CHANNEL_NAMES \"Lead 1\" \"\" \"PATTERN 7\"\n"
+        "CHANNEL_FILTERS 0 255 0 0 255 0 0 255 0\n"
+        "CHANNEL_TRACKS 2 2 1 80 \"Muted chords\"\n"
+        "REVERB 128 64 0 255\n"
+        "RECORD_SETTINGS 1 0\n"
+        "RECORD_INSERT_JUMP 1\n";
+    juce::File songFile = dir.getChildFile("song.xtp");
+    songFile.replaceWithText(content);
+
+    // Release builds compile assert() out; these checks must always run.
+    auto require = [](bool ok, const char* what) {
+        if (!ok)
+            throw std::runtime_error(std::string("Unified-instrument check failed: ") + what);
+    };
+
+    xtp::Song song;
+    juce::String error;
+    if (!song.loadFromFile(songFile, error))
+        throw std::runtime_error("Unified-instrument song failed to parse: " + error.toStdString());
+    require(song.instruments[20] == "builtin.sample", "song.instruments[20] == \"builtin.sample\"");
+    require(song.instrumentSampleSlot.at(20) == 3, "song.instrumentSampleSlot.at(20) == 3");
+    require(std::abs(song.instrumentParams.at(20).at("gain") - 0.5) < 1e-9, "std::abs(song.instrumentParams.at(20).at(\"gain\") - 0.5) < 1e-9");
+    require(std::abs(song.instrumentPitch.at(20) - 12.0f) < 1e-6f, "std::abs(song.instrumentPitch.at(20) - 12.0f) < 1e-6f");
+    require(song.moduleMessage == "hi", "song.moduleMessage == \"hi\"");
+    require((song.channelSilenced() == std::vector<bool> { false, true, true }), "(song.channelSilenced() == std::vector<bool> { false, true, true })");
+    require(std::abs(song.channelGains()[2] - 0.8f) < 1e-6f, "std::abs(song.channelGains()[2] - 0.8f) < 1e-6f");
+    std::cout << "✓ Parses INSTR_SAMPLE_SLOT, INSTRUMENT_PARAM/PITCH, quoted names, tracks and mutes" << std::endl;
+
+    // Only channel 0 may sound, through instrument 20, transposed +12.
+    xtp::Sequencer sequencer;
+    sequencer.reset(song.channels);
+    sequencer.setChannelSilenced(song.channelSilenced());
+    xtp::TransportClock transport;
+    transport.setPatternRows(song.rows);
+    transport.reset(song.rows);
+    MockNoteSink sink;
+    sequencer.dispatchRow(0, song.patterns[0], transport, sink);
+    require(sink.onEvents.size() == 1, "sink.onEvents.size() == 1");
+    require(sink.onEvents[0].instrument == 20 && sink.onEvents[0].midiNote == 60, "sink.onEvents[0].instrument == 20 && sink.onEvents[0].midiNote == 60");
+    std::cout << "✓ Muted channel and muted track trigger no notes" << std::endl;
+
+    XtpSequencerSource source(songFile, XtpSequencerSource::kRenderSampleRate);
+    if (!source.isValid())
+        throw std::runtime_error("Source failed to load: " + source.getLoadError().toStdString());
+    source.prepareToPlay(512, XtpSequencerSource::kRenderSampleRate);
+    juce::AudioBuffer<float> buffer(2, 4800);
+    buffer.clear();
+    source.getNextAudioBlock(juce::AudioSourceChannelInfo(&buffer, 0, buffer.getNumSamples()));
+    const float rms = buffer.getRMSLevel(0, 0, buffer.getNumSamples());
+    if (rms < 0.01f)
+        throw std::runtime_error("Sample instrument rendered silence (rms " + std::to_string(rms) + ")");
+    std::cout << "✓ Sample instrument 20 renders audio (rms " << rms << ")" << std::endl;
+
+    dir.deleteRecursively();
+    std::cout << std::endl;
+}
+
 void testVideoExporter()
 {
     std::cout << "=== Testing VideoExporter ===" << std::endl;
@@ -1566,6 +1668,7 @@ int main()
         testXtpSequencerMissingSampleFile();
         testXtpSequencerRowJump();
         testXtpSequencerChannelVolume();
+        testXtpUnifiedSampleInstrument();
         testVideoExporter();
         testPlaylistVideoExporter();
         testScreenRecorder();

@@ -105,11 +105,15 @@ namespace
 
     bool isKnownTailToken(const std::string& t)
     {
+        // Mirrors isSongTailToken in exTracker's loadPatternFromFile (main.cpp).
         static const char* const known[] = {
             "SONG_ORDER", "PATTERN_SWING", "INSERT_SWING_INHERIT", "ROW_EDIT_SCOPE",
             "TRANSPORT", "MIDI_MAP", "MIDI_TRANSPORT", "MIDI_EDITOR_CC_MAP",
-            "CHANNEL_INSTRUMENTS", "CHANNEL_MUTED", "CHANNEL_VOLUME", "SAMPLE_BANK", "SAMPLE_ENTRY",
-            "INSTRUMENT_ASSIGN", "MODULE_MESSAGE"
+            "SAMPLE_BANK", "SAMPLE_ENTRY", "INSTRUMENT_ASSIGN", "INSTR_SAMPLE_SLOT",
+            "INSTRUMENT_NAME", "INSTRUMENT_PARAM", "INSTRUMENT_PRESET", "INSTRUMENT_FILTER",
+            "INSTRUMENT_EFFECTS", "INSTRUMENT_PITCH", "INSTRUMENT_REVERB", "INSTRUMENT_DEPTH",
+            "MODULE_MESSAGE", "CHANNEL_INSTRUMENTS", "CHANNEL_MUTED", "CHANNEL_VOLUME",
+            "CHANNEL_NAMES", "CHANNEL_FILTERS", "CHANNEL_TRACKS", "REVERB"
         };
         for (auto* k : known)
             if (t == k)
@@ -176,10 +180,68 @@ bool Song::applyTrailerToken(std::istream& in, const std::string& token, const j
         in >> timeoutMs >> lockTempo; // MIDI clock sync settings, not audio-relevant
     }
     else if (token == "MIDI_MAP" || token == "MIDI_EDITOR_CC_MAP"
-             || token == "CHANNEL_INSTRUMENTS" || token == "CHANNEL_MUTED"
-             || token.rfind("RECORD_", 0) == 0)
+             || token == "CHANNEL_INSTRUMENTS")
     {
         readNumericTokenSequence(in); // consumed, not interpreted: none affect playback
+    }
+    else if (token.rfind("RECORD_", 0) == 0
+             || token == "INSTRUMENT_NAME" || token == "INSTRUMENT_PRESET"
+             || token == "INSTRUMENT_FILTER" || token == "INSTRUMENT_EFFECTS"
+             || token == "INSTRUMENT_REVERB" || token == "INSTRUMENT_DEPTH"
+             || token == "CHANNEL_NAMES" || token == "CHANNEL_FILTERS" || token == "REVERB")
+    {
+        // One line each, possibly with quoted strings: skip the whole line so a
+        // name never desyncs the parse. Not rendered (plugin presets, per-
+        // instrument/channel filters and effects, and reverb are exTracker DSP
+        // soundplayer2 doesn't reproduce).
+        std::string line;
+        std::getline(in, line);
+    }
+    else if (token == "CHANNEL_MUTED")
+    {
+        auto values = readNumericTokenSequence(in);
+        channelMuted.assign(values.size(), false);
+        for (std::size_t i = 0; i < values.size(); ++i)
+            channelMuted[i] = values[i] != 0;
+    }
+    else if (token == "CHANNEL_TRACKS")
+    {
+        // <first> <last> <muted> <volume%> "<name>", repeated, on one line.
+        std::string line;
+        std::getline(in, line);
+        std::istringstream values(line);
+        int first = 0, last = 0, muted = 0, pct = 100;
+        std::string name;
+        while (values >> first >> last >> muted >> pct >> std::quoted(name))
+            if (first >= 0 && first <= last)
+                tracks.push_back({ first, last, muted != 0, (float) juce::jlimit(0, 200, pct) / 100.0f });
+    }
+    else if (token == "INSTR_SAMPLE_SLOT")
+    {
+        int instrSlot = -1, sampleSlot = -1;
+        if (!(in >> instrSlot >> sampleSlot))
+            return false;
+        if (instrSlot >= 0 && instrSlot < kInstrumentSlots && sampleSlot >= 0 && sampleSlot <= 256)
+            instrumentSampleSlot[instrSlot] = sampleSlot;
+    }
+    else if (token == "INSTRUMENT_PARAM")
+    {
+        int instrSlot = -1;
+        std::string paramName;
+        double value = 0.0;
+        if (!(in >> instrSlot >> paramName >> value))
+            return false;
+        if (instrSlot >= 0 && instrSlot < kInstrumentSlots)
+            instrumentParams[instrSlot][paramName] = value;
+    }
+    else if (token == "INSTRUMENT_PITCH")
+    {
+        int instrSlot = -1;
+        float semitones = 0.0f;
+        if (!(in >> instrSlot >> semitones))
+            return false;
+        if (instrSlot >= 0 && instrSlot < kInstrumentSlots)
+            instrumentPitch[instrSlot] = semitones;
     }
     else if (token == "CHANNEL_VOLUME")
     {
@@ -214,7 +276,24 @@ bool Song::applyTrailerToken(std::istream& in, const std::string& token, const j
         if (!(in >> slot >> std::quoted(pluginId)))
             return false;
         if (slot >= 0 && slot < (int) instruments.size())
-            instruments[(size_t) slot] = juce::String::fromUTF8(pluginId.data(), (int) pluginId.size());
+        {
+            juce::String id = juce::String::fromUTF8(pluginId.data(), (int) pluginId.size());
+            // exTracker bundles soundfonts next to the song and stores the path
+            // relative to it ("sf2:song_instruments/instr_003_x.sf2"); a
+            // ":melodic:NN" suffix (drum-key chromatic mode) follows the path.
+            if (id.startsWith("sf2:"))
+            {
+                juce::String path = id.substring(4);
+                const int melodic = path.lastIndexOf(":melodic:");
+                const juce::String suffix = melodic >= 0 ? path.substring(melodic) : juce::String();
+                if (melodic >= 0)
+                    path = path.substring(0, melodic);
+                if (! juce::File::isAbsolutePath(path))
+                    path = moduleDirectory.getChildFile(path).getFullPathName();
+                id = "sf2:" + path + suffix;
+            }
+            instruments[(size_t) slot] = id;
+        }
     }
     else if (token == "MODULE_MESSAGE")
     {
@@ -429,6 +508,29 @@ bool Song::loadFromFile(const juce::File& file, juce::String& errorMessage)
 
     loaded = true;
     return true;
+}
+
+std::vector<float> Song::channelGains() const
+{
+    std::vector<float> gains((size_t) juce::jmax(0, channels), 1.0f);
+    for (std::size_t ch = 0; ch < gains.size() && ch < channelVolume.size(); ++ch)
+        gains[ch] = channelVolume[ch];
+    for (const auto& track : tracks)
+        for (int ch = track.first; ch <= track.last && ch < (int) gains.size(); ++ch)
+            gains[(size_t) ch] *= track.volume;
+    return gains;
+}
+
+std::vector<bool> Song::channelSilenced() const
+{
+    std::vector<bool> silenced((size_t) juce::jmax(0, channels), false);
+    for (std::size_t ch = 0; ch < silenced.size() && ch < channelMuted.size(); ++ch)
+        silenced[ch] = channelMuted[ch];
+    for (const auto& track : tracks)
+        if (track.muted)
+            for (int ch = track.first; ch <= track.last && ch < (int) silenced.size(); ++ch)
+                silenced[(size_t) ch] = true;
+    return silenced;
 }
 
 double Song::estimateDurationSeconds() const
