@@ -1,5 +1,6 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
+#include "Util/AppLogger.h"
 
 #ifndef JUCE_APPLICATION_NAME_STRING
 #define JUCE_APPLICATION_NAME_STRING "SoundPlayer2"
@@ -42,6 +43,10 @@ public:
         }
        #endif
 
+        logger = std::make_unique<AppLogger>();
+        juce::Logger::setCurrentLogger (logger.get());
+        juce::Logger::writeToLog (getApplicationName() + " " + getApplicationVersion() + " starting");
+
         mainWindow.reset (new MainWindow (getApplicationName()));
 
        #if JUCE_LINUX
@@ -57,6 +62,9 @@ public:
         instanceServer.reset();
        #endif
         mainWindow = nullptr;
+
+        juce::Logger::setCurrentLogger (nullptr);
+        logger.reset();
     }
 
     void systemRequestedQuit() override
@@ -226,6 +234,7 @@ private:
     std::unique_ptr<SingleInstanceServer> instanceServer;
    #endif // JUCE_LINUX
 
+    std::unique_ptr<AppLogger> logger;
     std::unique_ptr<MainWindow> mainWindow;
 };
 

@@ -328,6 +328,8 @@ set(SOUNDPLAYER_APP_SOURCES
     Source/Effects/EqualizerComponent.cpp
     Source/Export/PlaylistVideoExportController.h
     Source/Export/PlaylistVideoExportController.cpp
+    Source/Util/AppLogger.h
+    Source/Util/AppLogger.cpp
     Source/Export/VideoExportController.h
     Source/Export/VideoExportController.cpp
     Source/UI/AudioAnalysisComponent.h
