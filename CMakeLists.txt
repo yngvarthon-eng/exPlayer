@@ -273,6 +273,14 @@ set(SOUNDPLAYER_CORE_SOURCES
     Source/Playlist/PlaylistManager.cpp
     Source/Playlist/AudioFileCollector.h
     Source/Playlist/AudioFileCollector.cpp
+    Source/Recorder/MicClip.h
+    Source/Recorder/MicClip.cpp
+    Source/Recorder/MicRecorder.h
+    Source/Recorder/MicRecorder.cpp
+    Source/Recorder/ClipPlaybackSource.h
+    Source/Recorder/ClipPlaybackSource.cpp
+    Source/Recorder/ClipEffects.h
+    Source/Recorder/ClipEffects.cpp
     Source/Plugins/ClapPluginFormat.h
     Source/Plugins/ClapPluginFormat.cpp
     Source/Plugins/Lv2PluginFormat.h
@@ -346,6 +354,10 @@ set(SOUNDPLAYER_APP_SOURCES
     Source/UI/MainToolbar.cpp
     Source/UI/MidiInputMenu.h
     Source/UI/MidiInputMenu.cpp
+    Source/UI/MicRecorderComponent.h
+    Source/UI/MicRecorderComponent.cpp
+    Source/UI/WaveformEditorComponent.h
+    Source/UI/WaveformEditorComponent.cpp
     Source/UI/PlayerControlsComponent.h
     Source/UI/PlayerControlsComponent.cpp
     Source/UI/DriveAwareFileBrowser.h

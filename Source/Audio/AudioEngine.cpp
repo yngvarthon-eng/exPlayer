@@ -889,6 +889,25 @@ bool AudioEngine::updateAudioDevice()
     return true;
 }
 
+// ---- Auxiliary source ----
+
+void AudioEngine::setAuxiliarySource(juce::AudioSource* source)
+{
+    if (source != nullptr)
+        if (auto* device = deviceManager->getCurrentAudioDevice())
+            source->prepareToPlay(device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
+
+    juce::AudioSource* previous = nullptr;
+    {
+        const juce::ScopedLock sl(auxSourceLock);
+        previous = auxSource;
+        auxSource = source;
+    }
+
+    if (previous != nullptr && previous != source)
+        previous->releaseResources();
+}
+
 // ---- Recording ----
 
 void AudioEngine::startRecording(const juce::File& outputFile)
@@ -969,6 +988,11 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     equalizer.prepare(sampleRate, bufferSize, activeOutputChannels.load());
     pluginChain.prepare(sampleRate, bufferSize);
     midiCollector.reset(sampleRate);
+
+    auxBuffer.setSize(2, bufferSize);
+    const juce::ScopedLock sl(auxSourceLock);
+    if (auxSource != nullptr)
+        auxSource->prepareToPlay(bufferSize, sampleRate);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -1025,6 +1049,21 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     {
         expandStereoToOutputChannels(outputBuffer, numOutputChannels, numSamples,
                                      &activeOutputChannelNames);
+    }
+
+    // Mic recorder preview: mixed in after the chain, so it is heard dry.
+    {
+        const juce::ScopedTryLock sl(auxSourceLock);
+        if (sl.isLocked() && auxSource != nullptr)
+        {
+            auxBuffer.setSize(2, numSamples, false, false, true);
+            juce::AudioSourceChannelInfo auxInfo(&auxBuffer, 0, numSamples);
+            auxSource->getNextAudioBlock(auxInfo);
+
+            const int mixChannels = juce::jmin(2, numOutputChannels);
+            for (int ch = 0; ch < mixChannels; ++ch)
+                outputBuffer.addFrom(ch, 0, auxBuffer, ch, 0, numSamples);
+        }
     }
 
     outputBuffer.applyGain(masterGain.load());

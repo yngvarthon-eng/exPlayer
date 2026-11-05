@@ -113,6 +113,7 @@ void MainComponent::connectPanelRequests()
     // Transport: the record menu's two video-export entries.
     playerControls->onRequestVideoExport         = [this] { showExportVideoDialog(); };
     playerControls->onRequestPlaylistVideoExport = [this] { showExportPlaylistVideoDialog(); };
+    playerControls->onRequestMicRecorder         = [this] { showMicRecorder(); };
 
     // The 30-band equalizer view needs more room than the 10-band one.
     equalizerUI->onExpandedChanged = [this] { resized(); };
@@ -309,6 +310,29 @@ void MainComponent::showExportVideoDialog()
 void MainComponent::showExportPlaylistVideoDialog()
 {
     playlistVideoExport->showExportDialog();
+}
+
+void MainComponent::showMicRecorder()
+{
+    if (micRecorderWindow != nullptr)
+    {
+        micRecorderWindow->toFront (true);
+        return;
+    }
+
+    micRecorderWindow = std::make_unique<MicRecorderWindow> (
+        *audioEngine,
+        [this] (const juce::File& file) { addFilesAndSelectFirstNew ({ file }, true); },
+        [this]
+        {
+            // Called from inside the window's own close handling, so defer
+            // the delete until that call stack has unwound.
+            juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<MainComponent> (this)]
+            {
+                if (safeThis != nullptr)
+                    safeThis->micRecorderWindow.reset();
+            });
+        });
 }
 
 // ==============================================================================

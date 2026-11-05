@@ -118,6 +118,13 @@ public:
     void  setMasterGain(float gain) { masterGain.store(juce::jlimit(0.0f, 1.0f, gain)); }
     float getMasterGain() const     { return masterGain.load(); }
 
+    // An extra source mixed into the output after the EQ/FX chain (so it is
+    // heard dry) but before master volume -- the mic recorder previews takes
+    // through this. Pass nullptr to remove it. The engine prepares the source
+    // against the live device; the caller keeps ownership and must remove it
+    // before destroying it.
+    void setAuxiliarySource(juce::AudioSource* source);
+
     // Recording
     void startRecording(const juce::File& outputFile);
     void stopRecording();
@@ -205,6 +212,11 @@ private:
     juce::MidiMessageCollector midiCollector;
 
     std::atomic<float> masterGain { 1.0f };
+
+    // See setAuxiliarySource(). The audio thread only try-locks this.
+    juce::CriticalSection auxSourceLock;
+    juce::AudioSource* auxSource = nullptr;
+    juce::AudioBuffer<float> auxBuffer;
 
     // Background stream loader (stoppable, unlike juce::Thread::launch)
     struct StreamLoader : public juce::Thread

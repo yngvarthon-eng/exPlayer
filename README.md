@@ -14,6 +14,7 @@ Current Version: 1.3.0
 - **10-Band Equalizer**: Adjust audio across 10 frequency bands (31 Hz - 16 kHz)
 - **Real-time Visualization**: Waveform, spectrum bars, spectrogram, VU meter, and Lissajous plugins
 - **Video Export**: Render the visualization, the tracker pattern grid, or both combined to an MP4 for the full length of a track, with a choice of color theme and an optional text overlay (requires `ffmpeg` on PATH)
+- **Microphone Recorder** (Record ▸ Record from microphone...): pick any audio input (defaults to the system/PipeWire input), watch its level, record takes (auto mono picks the channel a mono mic is on) and edit them on a zoomable waveform — select, play, trim, delete, silence, fade in/out, normalize, make mono, remove mains hum, spectral noise reduction, undo/redo — then save as 24-bit WAV/FLAC and optionally add it to the playlist. `SOUNDPLAYER_MIC_PROBE=1 ./SoundPlayer2Tests` checks that the real input opens and records.
 - **Playback Quality Control**: 
   - Sample rates: offered per the output device's actual capabilities (e.g. 44.1/48/96/192 kHz)
   - Bit depths: 16-bit, 24-bit, 32-bit (dithered output requantization; 32-bit = full float)
