@@ -97,6 +97,9 @@ fi
 
 echo "Installing launcher -> $APP_DIR/$DESKTOP_FILE"
 install -m 0644 "$SCRIPT_DIR/$DESKTOP_FILE" "$APP_DIR/$DESKTOP_FILE"
+# Use the launcher's absolute path: the desktop session's PATH often lacks
+# ~/.local/bin until the next login, so a bare "explayer" would not launch.
+sed -i "s|^Exec=explayer |Exec=$BIN_DIR/explayer |" "$APP_DIR/$DESKTOP_FILE"
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
 fi
