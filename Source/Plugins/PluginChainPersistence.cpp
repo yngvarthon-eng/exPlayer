@@ -1,10 +1,10 @@
 #include "PluginChainPersistence.h"
+#include "../Util/AppDataDirectory.h"
 #include "PluginChain.h"
 
 juce::File PluginChainPersistence::getChainFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("fx_chain.xml");
 }
 

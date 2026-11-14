@@ -193,7 +193,7 @@ bool Song::applyTrailerToken(std::istream& in, const std::string& token, const j
         // One line each, possibly with quoted strings: skip the whole line so a
         // name never desyncs the parse. Not rendered (plugin presets, per-
         // instrument/channel filters and effects, and reverb are exTracker DSP
-        // soundplayer2 doesn't reproduce).
+        // exPlayer doesn't reproduce).
         std::string line;
         std::getline(in, line);
     }

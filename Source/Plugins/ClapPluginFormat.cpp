@@ -28,8 +28,8 @@ static void        clapHostRequestCallback(const clap_host_t*)            {}
 static const clap_host_t g_clapHost = {
     CLAP_VERSION,
     nullptr,                   // host_data
-    "SoundPlayer2",            // name
-    "SoundPlayer",             // vendor
+    "exPlayer",            // name
+    "Exodus",                  // vendor
     "",                        // url
     "0.1.0",                   // version
     clapHostGetExtension,

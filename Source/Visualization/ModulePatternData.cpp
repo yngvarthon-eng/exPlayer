@@ -1,6 +1,6 @@
 #include "ModulePatternData.h"
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
  #include <libopenmpt/libopenmpt.hpp>
 #endif
 
@@ -25,7 +25,7 @@ bool ModulePatternData::loadFromFile(const juce::File& file)
 {
     clear();
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     juce::MemoryBlock raw;
     if (!file.loadFileAsData(raw))
         return false;

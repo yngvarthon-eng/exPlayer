@@ -706,7 +706,7 @@ void testXtpPlayPositionForPatternViewer()
     std::cout << std::endl;
 }
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 void testOpenMptPlayPositionForPatternViewer()
 {
     std::cout << "=== Testing libopenmpt play position (row fraction, song order) ===" << std::endl;
@@ -2271,13 +2271,13 @@ void testNoiseReductionKeepsVoice()
     std::cout << "✓ Voice harmonics survive while hiss in the pauses drops" << std::endl;
 }
 
-// Hardware probe, skipped unless SOUNDPLAYER_MIC_PROBE=1: opens the real
+// Hardware probe, skipped unless EXPLAYER_MIC_PROBE=1: opens the real
 // default input exactly as the recorder window does, records two seconds and
 // reports the level -- a quick way to tell "the app can't open the mic" from
 // "the mic is muted/too quiet" on a given machine.
 void testMicRecorderLiveDevice()
 {
-    if (juce::SystemStats::getEnvironmentVariable("SOUNDPLAYER_MIC_PROBE", {}) != "1")
+    if (juce::SystemStats::getEnvironmentVariable("EXPLAYER_MIC_PROBE", {}) != "1")
         return;
 
     std::cout << "=== Probing the real microphone input ===" << std::endl;
@@ -2309,7 +2309,7 @@ void testMicRecorderLiveDevice()
 int main()
 {
     std::cout << "\n════════════════════════════════════════" << std::endl;
-    std::cout << "  SoundPlayer2 Feature Test Suite" << std::endl;
+    std::cout << "  exPlayer Feature Test Suite" << std::endl;
     std::cout << "════════════════════════════════════════\n" << std::endl;
     
     try
@@ -2327,7 +2327,7 @@ int main()
         testXtpSequencerMissingSampleFile();
         testXtpSequencerRowJump();
         testXtpPlayPositionForPatternViewer();
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
         testOpenMptPlayPositionForPatternViewer();
 #endif
         testXtpSequencerChannelVolume();

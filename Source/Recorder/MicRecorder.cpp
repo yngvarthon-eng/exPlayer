@@ -1,4 +1,5 @@
 #include "MicRecorder.h"
+#include "../Util/AppDataDirectory.h"
 #include "ClipEffects.h"
 
 namespace
@@ -24,8 +25,7 @@ MicRecorder::~MicRecorder()
 
 juce::File MicRecorder::getSettingsFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("mic_input.xml");
 }
 

@@ -549,7 +549,7 @@ void ModulePatternViewer::setPatternData(const ModulePatternData* data)
     grid->setGhostPatterns(nullptr, nullptr);
     grid->setViewRow(0.0, false);
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (data != nullptr && data->isLoaded() && data->getNumPatterns() > 0)
     {
         statusLabel->setVisible(false);

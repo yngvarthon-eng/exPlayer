@@ -10,7 +10,7 @@ class PluginHostManager;
  * plugin's own parameter state) across app restarts.
  *
  * Mirrors EqPresetManager's file convention: same base directory
- * (~/.local/share/SoundPlayer2 on Linux), save-immediately-after-every-mutation
+ * (~/.local/share/exPlayer on Linux), save-immediately-after-every-mutation
  * for crash resilience.
  */
 namespace PluginChainPersistence

@@ -1,6 +1,6 @@
 #include "XtpSequencerSource.h"
 
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
 #include "XtpSf2Voice.h"
 #endif
 
@@ -103,7 +103,7 @@ void XtpSequencerSource::buildInstrumentVoices()
                 }
             }
         }
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
         else if (id.startsWith("sf2:"))
         {
             // Treated as a direct filesystem path, not exTracker's own

@@ -2,8 +2,8 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <!-- Tracker/module formats that shared-mime-info often does not define.
        Registering them lets the .desktop MimeType associations resolve. -->
-  <mime-type type="audio/x-soundplayer2-module">
-    <comment>Tracker module audio (SoundPlayer2)</comment>
+  <mime-type type="audio/x-explayer-module">
+    <comment>Tracker module audio (exPlayer)</comment>
     <glob pattern="*.mod"/>
     <glob pattern="*.xm"/>
     <glob pattern="*.it"/>

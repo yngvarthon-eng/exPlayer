@@ -75,7 +75,7 @@ private:
 class SampleVoice : public InstrumentVoice
 {
 public:
-    // Decodes the WAV via JUCE's own reader (soundplayer2 already links
+    // Decodes the WAV via JUCE's own reader (exPlayer already links
     // juce_audio_formats) rather than hand-rolling a parser as exTracker does --
     // this is decode-only with no playback-timing implications.
     bool loadSample(const juce::File& file);
@@ -84,7 +84,7 @@ public:
     // Same names and clamping as BuiltinSamplePlugin::setParameter: "gain",
     // "sample_root", "loop_mode" (0 off, 1 forward, 2 ping-pong, 3 sustain),
     // "loop_start", "loop_end" (frames; <= 0 = end of sample). "pan" is
-    // accepted and ignored (soundplayer2 mixes xtp voices to mono).
+    // accepted and ignored (exPlayer mixes xtp voices to mono).
     void setParameter(const std::string& name, double value);
 
     void noteOn(int midiNote, std::uint8_t velocity, bool retrigger) override;

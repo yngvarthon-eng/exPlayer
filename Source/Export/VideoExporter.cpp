@@ -356,7 +356,7 @@ void VideoExporter::run()
     // for PatternGrid/Combined mode -- exactly what AudioEngine::getCurrentPatternRow/
     // Index (AudioEngine.cpp) query for the live UI, just against our own offline source.
     XtpSequencerSource* xtpPtr = nullptr;
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     OpenMptAudioFormatReader* openMptReaderPtr = nullptr;
 #endif
 
@@ -383,7 +383,7 @@ void VideoExporter::run()
             return;
         }
         sampleRate = reader->sampleRate;
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
         openMptReaderPtr = dynamic_cast<OpenMptAudioFormatReader*>(reader);
 #endif
         source = std::make_unique<MultiChannelAudioFormatReaderSource>(reader, true);
@@ -399,7 +399,7 @@ void VideoExporter::run()
             pos.rowFraction   = xtpPtr->getCurrentRowFraction();
             pos.orderPosition = xtpPtr->getCurrentOrderPosition();
         }
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
         else if (openMptReaderPtr != nullptr)
         {
             pos.pattern       = openMptReaderPtr->getCurrentPattern();

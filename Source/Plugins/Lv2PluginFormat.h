@@ -1,13 +1,13 @@
 #pragma once
 
-#ifdef SOUNDPLAYER_LV2_SUPPORT
+#ifdef EXPLAYER_LV2_SUPPORT
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
 /**
  * JUCE AudioPluginFormat that hosts LV2 plugins via lilv.
  *
- * Only compiled when SOUNDPLAYER_LV2_SUPPORT is defined (requires lilv-0).
+ * Only compiled when EXPLAYER_LV2_SUPPORT is defined (requires lilv-0).
  * Scans installed LV2 bundles using lilv_world_load_all().
  */
 class Lv2PluginFormat : public juce::AudioPluginFormat
@@ -53,4 +53,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Lv2PluginFormat)
 };
 
-#endif // SOUNDPLAYER_LV2_SUPPORT
+#endif // EXPLAYER_LV2_SUPPORT

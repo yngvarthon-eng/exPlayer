@@ -8,8 +8,8 @@
 // Installed once in Main.cpp via juce::Logger::setCurrentLogger(), after which
 // any juce::Logger::writeToLog() call in the app ends up in both places.
 //
-// The file lives at <userApplicationDataDirectory>/SoundPlayer2/logs/soundplayer2.log
-// (~/.config/SoundPlayer2/logs/soundplayer2.log on Linux), next to the app's
+// The file lives at <userApplicationDataDirectory>/exPlayer/logs/explayer.log
+// (~/.config/exPlayer/logs/explayer.log on Linux), next to the app's
 // other settings files. It is trimmed to its newest MAX_FILE_SIZE_BYTES at
 // startup so it never grows without bound.
 class AppLogger : public juce::Logger

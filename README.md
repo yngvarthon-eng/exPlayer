@@ -1,4 +1,4 @@
-# SoundPlayer2 - A Modern Audio Player with JUCE
+# exPlayer - A Modern Audio Player with JUCE
 
 A feature-rich audio player built with JUCE, supporting standard and module audio formats with an intuitive playlist editor, equalizer effects, and audio visualizations.
 
@@ -14,7 +14,7 @@ Current Version: 1.3.0
 - **10-Band Equalizer**: Adjust audio across 10 frequency bands (31 Hz - 16 kHz)
 - **Real-time Visualization**: Waveform, spectrum bars, spectrogram, VU meter, and Lissajous plugins
 - **Video Export**: Render the visualization, the tracker pattern grid, or both combined to an MP4 for the full length of a track, with a choice of color theme and an optional text overlay (requires `ffmpeg` on PATH)
-- **Microphone Recorder** (Record ▸ Record from microphone...): pick any audio input (defaults to the system/PipeWire input), watch its level, record takes (auto mono picks the channel a mono mic is on) and edit them on a zoomable waveform — select, play, trim, delete, silence, fade in/out, normalize, make mono, remove mains hum, spectral noise reduction, undo/redo — then save as 24-bit WAV/FLAC and optionally add it to the playlist. `SOUNDPLAYER_MIC_PROBE=1 ./SoundPlayer2Tests` checks that the real input opens and records.
+- **Microphone Recorder** (Record ▸ Record from microphone...): pick any audio input (defaults to the system/PipeWire input), watch its level, record takes (auto mono picks the channel a mono mic is on) and edit them on a zoomable waveform — select, play, trim, delete, silence, fade in/out, normalize, make mono, remove mains hum, spectral noise reduction, undo/redo — then save as 24-bit WAV/FLAC and optionally add it to the playlist. `EXPLAYER_MIC_PROBE=1 ./exPlayerTests` checks that the real input opens and records.
 - **Playback Quality Control**: 
   - Sample rates: offered per the output device's actual capabilities (e.g. 44.1/48/96/192 kHz)
   - Bit depths: 16-bit, 24-bit, 32-bit (dithered output requantization; 32-bit = full float)
@@ -66,7 +66,7 @@ Source/
 mkdir build && cd build
 cmake ..
 cmake --build . --config Release
-./SoundPlayer2_artefacts/SoundPlayer2
+./exPlayer_artefacts/exPlayer
 ```
 
 #### macOS
@@ -74,7 +74,7 @@ cmake --build . --config Release
 mkdir build && cd build
 cmake ..
 cmake --build . --config Release
-open SoundPlayer2.app
+open exPlayer.app
 ```
 
 #### Windows
@@ -82,14 +82,14 @@ open SoundPlayer2.app
 mkdir build && cd build
 cmake ..
 cmake --build . --config Release
-SoundPlayer2.exe
+exPlayer.exe
 ```
 
 ### Running
 
 ```bash
 # From the build directory
-./SoundPlayer2_artefacts/SoundPlayer2
+./exPlayer_artefacts/exPlayer
 ```
 
 ### Optional Dependencies
@@ -108,7 +108,7 @@ sudo dnf install libopenmpt-devel libxmp-devel
 
 ## Desktop Integration (Linux)
 
-To add a menu entry and associate audio/module files with SoundPlayer2, build the
+To add a menu entry and associate audio/module files with exPlayer, build the
 app first, then run the installer:
 
 ```bash
@@ -117,11 +117,11 @@ bash packaging/install-desktop.sh
 ```
 
 This installs into your user profile (no sudo):
-- a launcher symlink → `~/.local/bin/soundplayer2`
-- an application menu entry (`SoundPlayer2`)
+- a launcher symlink → `~/.local/bin/explayer`
+- an application menu entry (`exPlayer`)
 - file associations for MP3, WAV, FLAC, OGG and module formats (MOD, XM, IT, S3M)
 
-Double-clicking an associated file (or running `soundplayer2 <file>`) adds it to
+Double-clicking an associated file (or running `explayer <file>`) adds it to
 the playlist and starts playback. Opening a file while the app is running routes
 it into the existing window (single-instance). The launcher points at your newest
 local build artifact, so rebuilding in the same build directory updates what the
@@ -184,7 +184,7 @@ Manages tracks with:
 
 ## Contributing
 
-To extend SoundPlayer2:
+To extend exPlayer:
 
 1. **Add Effects**: Create new classes in `Source/Effects/` inheriting from effect interface
 2. **Add Visualizations**: Extend `VisualizationComponent` or create new visualization plugins

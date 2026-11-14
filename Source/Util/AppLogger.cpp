@@ -1,4 +1,5 @@
 #include "AppLogger.h"
+#include "AppDataDirectory.h"
 
 #include <iostream>
 
@@ -11,10 +12,9 @@ AppLogger::AppLogger()
 
 juce::File AppLogger::getDefaultLogFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("logs")
-               .getChildFile("soundplayer2.log");
+               .getChildFile("explayer.log");
 }
 
 void AppLogger::logMessage(const juce::String& message)

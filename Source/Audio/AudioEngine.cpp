@@ -45,7 +45,7 @@ std::unique_ptr<juce::AudioFormatManager> AudioEngine::createStandaloneFormatMan
 {
     auto fm = std::make_unique<juce::AudioFormatManager>();
     fm->registerBasicFormats();
-#if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+#if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
     fm->registerFormat(new OpenMptAudioFormat(), false);
 #endif
     return fm;
@@ -225,7 +225,7 @@ void AudioEngine::loadTrack(const juce::File& file)
     transportSource->stop();
     transportSource->setSource(nullptr);
     transportSource->setPosition(0.0);  // reset so new track always starts from zero
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr; // clear before readerSource.reset() deletes the reader
 #endif
     readerSource.reset();
@@ -262,7 +262,7 @@ void AudioEngine::loadTrack(const juce::File& file)
                 file.getFileName().toRawUTF8(), reader->sampleRate,
                 (int)reader->numChannels, reader->lengthInSamples / reader->sampleRate);
         readerSource = std::make_unique<MultiChannelAudioFormatReaderSource>(reader, true);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
         if (lastFileWasModule)
             openMptReader = dynamic_cast<OpenMptAudioFormatReader*>(reader);
 #endif
@@ -278,7 +278,7 @@ void AudioEngine::loadXtpSequence(const juce::File& file)
     transportSource->stop();
     transportSource->setSource(nullptr);
     transportSource->setPosition(0.0);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -341,7 +341,7 @@ void AudioEngine::loadVideoInternal(const juce::File& file, int audioTrackIndex,
     // loadTrack/loadXtpSequence/loadStream).
     transportSource->stop();
     transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -438,7 +438,7 @@ void AudioEngine::loadStream(const juce::String& url, bool reconnecting, int rec
     // Tear down current playback on the message thread (safe to do here).
     transportSource->stop();
     transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -1097,7 +1097,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
 int AudioEngine::getCurrentPatternRow() const
 {
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
         return openMptReader->getCurrentRow();
 #endif
@@ -1108,7 +1108,7 @@ int AudioEngine::getCurrentPatternRow() const
 
 int AudioEngine::getCurrentPatternIndex() const
 {
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
         return openMptReader->getCurrentPattern();
 #endif
@@ -1120,7 +1120,7 @@ int AudioEngine::getCurrentPatternIndex() const
 PatternPlayPosition AudioEngine::getPatternPlayPosition() const
 {
     PatternPlayPosition pos;
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
     {
         pos.pattern       = openMptReader->getCurrentPattern();
@@ -1144,7 +1144,7 @@ PatternPlayPosition AudioEngine::getPatternPlayPosition() const
 
 int AudioEngine::takeModuleChannelLevels(std::vector<float>& levels)
 {
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
     {
         levels.resize((size_t) OpenMptAudioFormatReader::kMaxLevelChannels);
@@ -1170,7 +1170,7 @@ void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster*)
             // Playlist was cleared
             transportSource->stop();
             transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
             openMptReader = nullptr;
 #endif
             readerSource.reset();

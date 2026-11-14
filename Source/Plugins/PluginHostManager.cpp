@@ -1,7 +1,7 @@
 #include "PluginHostManager.h"
 #include "ClapPluginFormat.h"
 
-#ifdef SOUNDPLAYER_LV2_SUPPORT
+#ifdef EXPLAYER_LV2_SUPPORT
 #include "Lv2PluginFormat.h"
 #endif
 
@@ -12,7 +12,7 @@ void PluginHostManager::initialise()
     formatManager.addDefaultFormats(); // adds VST3 (when JUCE_PLUGINHOST_VST3=1)
     formatManager.addFormat(new ClapPluginFormat());
 
-#ifdef SOUNDPLAYER_LV2_SUPPORT
+#ifdef EXPLAYER_LV2_SUPPORT
     formatManager.addFormat(new Lv2PluginFormat());
 #endif
 }

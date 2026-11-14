@@ -1,4 +1,5 @@
 #include "PluginChainPresetManager.h"
+#include "../Util/AppDataDirectory.h"
 #include "PluginChain.h"
 
 PluginChainPresetManager::PluginChainPresetManager()
@@ -52,8 +53,7 @@ bool PluginChainPresetManager::applyPreset(const juce::String& name, PluginChain
 
 juce::File PluginChainPresetManager::getPresetsFile() const
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("fx_chain_presets.xml");
 }
 

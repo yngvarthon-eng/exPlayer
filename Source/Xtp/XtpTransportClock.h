@@ -8,7 +8,7 @@ namespace xtp
 
 // Port of exTracker's Transport (extracker/src/transport.cpp), minus the
 // wall-clock-driven background thread: exTracker advances one tick per sleep()
-// on its own thread, but soundplayer2 pulls audio in fixed-size blocks, so here
+// on its own thread, but exPlayer pulls audio in fixed-size blocks, so here
 // advanceTick() is called synchronously from XtpSequencerSource as it subdivides
 // each block at tick boundaries. The tick-length formula, row/tick counters, and
 // swing math are otherwise identical so playback timing matches exTracker exactly.

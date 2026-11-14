@@ -1,6 +1,6 @@
 #include "XtpSf2Voice.h"
 
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
 
 #include <cstdio>
 
@@ -119,4 +119,4 @@ void Sf2Voice::renderAdd(std::vector<float>& monoBuffer, double /*sampleRate*/)
 
 } // namespace xtp
 
-#endif // SOUNDPLAYER_FLUIDSYNTH_SUPPORT
+#endif // EXPLAYER_FLUIDSYNTH_SUPPORT

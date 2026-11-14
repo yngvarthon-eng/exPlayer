@@ -16,7 +16,7 @@ bool FormatManager::isSupportedFormat(const juce::File& file) const
         return true;
 
     // Module formats (if libopenmpt is available)
-        #if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+        #if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
     if (extension == ".mod" || extension == ".xm" || extension == ".it" ||
         extension == ".s3m" || extension == ".mptm" || extension == ".umx" ||
         extension == ".ahx" || extension == ".ams" || extension == ".amf" ||

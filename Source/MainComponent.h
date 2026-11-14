@@ -64,7 +64,7 @@ public:
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     // Public so it can be invoked via PlayerControlsComponent's record menu
-    // ("Record video with Soundplayer2's export function"), not just a toolbar
+    // ("Record video with exPlayer's export function"), not just a toolbar
     // button of its own.
     void showExportVideoDialog();
 

@@ -1,9 +1,9 @@
 #include "MidiInputSettings.h"
+#include "../Util/AppDataDirectory.h"
 
 juce::File MidiInputSettings::getSettingsFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("midi_inputs.xml");
 }
 

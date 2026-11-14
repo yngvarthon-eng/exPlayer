@@ -209,7 +209,7 @@ void PlayerControlsComponent::showRecordMenu()
     menu.addSeparator();
     menu.addItem(1, "Record raw audio");
     menu.addItem(2, "Record screen to video");
-    menu.addItem(3, "Record video with Soundplayer2's export function");
+    menu.addItem(3, "Record video with exPlayer's export function");
     menu.addItem(4, "Record playlist as video");
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(recordButton.get()),
         [this](int result)

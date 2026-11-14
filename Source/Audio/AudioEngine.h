@@ -14,7 +14,7 @@
 #include "../Xtp/XtpSequencerSource.h"
 
 class PlaylistManager;
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 class OpenMptAudioFormatReader;
 #endif
 
@@ -261,7 +261,7 @@ private:
 
     // Non-owning pointer to the current openmpt reader (owned by readerSource)
     // Valid only while readerSource is alive and lastFileWasModule is true
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     OpenMptAudioFormatReader* openMptReader = nullptr;
 #endif
 

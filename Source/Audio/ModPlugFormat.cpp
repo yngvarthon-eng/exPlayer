@@ -1,19 +1,19 @@
-#if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+#if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
 
 #include "ModPlugFormat.h"
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 #include <libopenmpt/libopenmpt.hpp>
 #endif
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+#ifdef EXPLAYER_XMP_SUPPORT
 #include <xmp.h>
 #endif
 
 #include <cstdint>
 #include <cstdio>
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 
 // ---------------------------------------------------------------------------
 // OpenMptAudioFormatReader
@@ -211,9 +211,9 @@ double OpenMptAudioFormatReader::getCurrentRowFraction() const
     return juce::jlimit(0.0, 0.999, fraction);
 }
 
-#endif // SOUNDPLAYER_OPENMPT_SUPPORT
+#endif // EXPLAYER_OPENMPT_SUPPORT
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+#ifdef EXPLAYER_XMP_SUPPORT
 
 class XmpAudioFormatReader : public juce::AudioFormatReader
 {
@@ -331,7 +331,7 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(XmpAudioFormatReader)
 };
 
-#endif // SOUNDPLAYER_XMP_SUPPORT
+#endif // EXPLAYER_XMP_SUPPORT
 
 // ---------------------------------------------------------------------------
 // OpenMptAudioFormat
@@ -386,7 +386,7 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
         return nullptr;
     }
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     {
         juce::MemoryInputStream openMptStream(moduleData.getData(), moduleData.getSize(), false);
         auto* openMptReader = new OpenMptAudioFormatReader(&openMptStream, getFormatName());
@@ -403,7 +403,7 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
     }
 #endif
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+#ifdef EXPLAYER_XMP_SUPPORT
     {
         auto* xmpReader = new XmpAudioFormatReader(moduleData.getData(), moduleData.getSize(), getFormatName());
         if (xmpReader->lengthInSamples > 0)
@@ -423,4 +423,4 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
     return nullptr;
 }
 
-#endif // SOUNDPLAYER_OPENMPT_SUPPORT || SOUNDPLAYER_XMP_SUPPORT
+#endif // EXPLAYER_OPENMPT_SUPPORT || EXPLAYER_XMP_SUPPORT

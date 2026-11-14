@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+#if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 #include <libopenmpt/libopenmpt.hpp>
 
 /**
@@ -96,4 +96,4 @@ public:
     }
 };
 
-#endif // SOUNDPLAYER_OPENMPT_SUPPORT || SOUNDPLAYER_XMP_SUPPORT
+#endif // EXPLAYER_OPENMPT_SUPPORT || EXPLAYER_XMP_SUPPORT

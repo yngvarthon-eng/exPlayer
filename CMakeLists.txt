@@ -1,10 +1,10 @@
 # ==============================================================================
-# SoundPlayer2 - audio, tracker-module and video player built with JUCE.
+# exPlayer - audio, tracker-module and video player built with JUCE.
 #
 # Quick start (Linux):
 #     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 #     cmake --build build -j"$(nproc)"
-#     ./build/SoundPlayer2_artefacts/SoundPlayer2
+#     ./build/exPlayer_artefacts/exPlayer
 #
 # Feature overview of this file:
 #   * JUCE and the CLAP SDK are located locally when present, otherwise
@@ -20,7 +20,7 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(SoundPlayer2
+project(exPlayer
     VERSION 1.3.0
     DESCRIPTION "Modern audio, tracker module and video player built with JUCE"
     LANGUAGES C CXX)
@@ -52,25 +52,25 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 # Options
 # ------------------------------------------------------------------------------
 
-option(SOUNDPLAYER_BUILD_TESTS
-    "Build the SoundPlayer2 feature test executable" ON)
-option(SOUNDPLAYER_INSTALL_DESKTOP_FILES
+option(EXPLAYER_BUILD_TESTS
+    "Build the exPlayer feature test executable" ON)
+option(EXPLAYER_INSTALL_DESKTOP_FILES
     "Install the .desktop launcher and MIME/icon files (Linux)" ON)
-option(SOUNDPLAYER_WARNINGS_AS_ERRORS
+option(EXPLAYER_WARNINGS_AS_ERRORS
     "Treat compiler warnings as errors" OFF)
 
-option(SOUNDPLAYER_ENABLE_OPENMPT
+option(EXPLAYER_ENABLE_OPENMPT
     "Use libopenmpt for tracker module playback when available" ON)
-option(SOUNDPLAYER_ENABLE_XMP
+option(EXPLAYER_ENABLE_XMP
     "Use libxmp as a fallback tracker module decoder when available" ON)
-option(SOUNDPLAYER_ENABLE_LV2
+option(EXPLAYER_ENABLE_LV2
     "Use lilv to host LV2 plugins when available" ON)
-option(SOUNDPLAYER_ENABLE_FLUIDSYNTH
+option(EXPLAYER_ENABLE_FLUIDSYNTH
     "Use FluidSynth for SoundFont (.sf2) instrument playback when available" ON)
 
-set(SOUNDPLAYER_JUCE_VERSION "7.0.9" CACHE STRING "JUCE version to build against")
-set(SOUNDPLAYER_CLAP_VERSION "1.2.1" CACHE STRING "CLAP SDK version to download")
-set(SOUNDPLAYER_CLAP_SDK_DIR "" CACHE PATH
+set(EXPLAYER_JUCE_VERSION "7.0.9" CACHE STRING "JUCE version to build against")
+set(EXPLAYER_CLAP_VERSION "1.2.1" CACHE STRING "CLAP SDK version to download")
+set(EXPLAYER_CLAP_SDK_DIR "" CACHE PATH
     "Local CLAP SDK checkout (containing include/clap/clap.h). Leave empty to download it.")
 
 # ------------------------------------------------------------------------------
@@ -88,10 +88,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     message(STATUS "Using the JUCE checkout at ${CMAKE_CURRENT_SOURCE_DIR}/JUCE")
     add_subdirectory(JUCE)
 else()
-    message(STATUS "JUCE not found locally, downloading ${SOUNDPLAYER_JUCE_VERSION}")
+    message(STATUS "JUCE not found locally, downloading ${EXPLAYER_JUCE_VERSION}")
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG        ${SOUNDPLAYER_JUCE_VERSION}
+        GIT_TAG        ${EXPLAYER_JUCE_VERSION}
         GIT_SHALLOW    TRUE
         GIT_PROGRESS   TRUE)
     FetchContent_MakeAvailable(JUCE)
@@ -101,34 +101,34 @@ endif()
 # CLAP SDK (header-only; only the headers are needed)
 # ------------------------------------------------------------------------------
 
-set(SOUNDPLAYER_CLAP_SDK_DIR "${SOUNDPLAYER_CLAP_SDK_DIR}" )
-set(_soundplayer_clap_include_dir "")
+set(EXPLAYER_CLAP_SDK_DIR "${EXPLAYER_CLAP_SDK_DIR}" )
+set(_explayer_clap_include_dir "")
 
-if(SOUNDPLAYER_CLAP_SDK_DIR AND EXISTS "${SOUNDPLAYER_CLAP_SDK_DIR}/include/clap/clap.h")
-    set(_soundplayer_clap_include_dir "${SOUNDPLAYER_CLAP_SDK_DIR}/include")
-    message(STATUS "Using the CLAP SDK at ${SOUNDPLAYER_CLAP_SDK_DIR}")
+if(EXPLAYER_CLAP_SDK_DIR AND EXISTS "${EXPLAYER_CLAP_SDK_DIR}/include/clap/clap.h")
+    set(_explayer_clap_include_dir "${EXPLAYER_CLAP_SDK_DIR}/include")
+    message(STATUS "Using the CLAP SDK at ${EXPLAYER_CLAP_SDK_DIR}")
 else()
-    if(SOUNDPLAYER_CLAP_SDK_DIR)
+    if(EXPLAYER_CLAP_SDK_DIR)
         message(WARNING
-            "SOUNDPLAYER_CLAP_SDK_DIR is set to '${SOUNDPLAYER_CLAP_SDK_DIR}' but does not "
+            "EXPLAYER_CLAP_SDK_DIR is set to '${EXPLAYER_CLAP_SDK_DIR}' but does not "
             "contain include/clap/clap.h - downloading CLAP instead")
     endif()
 
     FetchContent_Declare(clap
         GIT_REPOSITORY https://github.com/free-audio/clap.git
-        GIT_TAG        ${SOUNDPLAYER_CLAP_VERSION}
+        GIT_TAG        ${EXPLAYER_CLAP_VERSION}
         GIT_SHALLOW    TRUE
         GIT_PROGRESS   TRUE)
     FetchContent_MakeAvailable(clap)
 
-    set(_soundplayer_clap_include_dir "${clap_SOURCE_DIR}/include")
+    set(_explayer_clap_include_dir "${clap_SOURCE_DIR}/include")
 endif()
 
 # Wrapped in our own interface target so the rest of the build never depends on
 # a target name defined by the CLAP project itself.
-add_library(SoundPlayer2ClapHeaders INTERFACE)
-target_include_directories(SoundPlayer2ClapHeaders SYSTEM INTERFACE
-    "${_soundplayer_clap_include_dir}")
+add_library(exPlayerClapHeaders INTERFACE)
+target_include_directories(exPlayerClapHeaders SYSTEM INTERFACE
+    "${_explayer_clap_include_dir}")
 # ------------------------------------------------------------------------------
 # Optional dependencies
 #
@@ -140,16 +140,16 @@ target_include_directories(SoundPlayer2ClapHeaders SYSTEM INTERFACE
 find_package(PkgConfig QUIET)
 
 if(PkgConfig_FOUND)
-    if(SOUNDPLAYER_ENABLE_OPENMPT)
+    if(EXPLAYER_ENABLE_OPENMPT)
         pkg_check_modules(OPENMPT IMPORTED_TARGET libopenmpt)
     endif()
-    if(SOUNDPLAYER_ENABLE_XMP)
+    if(EXPLAYER_ENABLE_XMP)
         pkg_check_modules(XMP IMPORTED_TARGET libxmp)
     endif()
-    if(SOUNDPLAYER_ENABLE_LV2)
+    if(EXPLAYER_ENABLE_LV2)
         pkg_check_modules(LILV IMPORTED_TARGET lilv-0)
     endif()
-    if(SOUNDPLAYER_ENABLE_FLUIDSYNTH)
+    if(EXPLAYER_ENABLE_FLUIDSYNTH)
         pkg_check_modules(FLUIDSYNTH IMPORTED_TARGET fluidsynth)
     endif()
 
@@ -163,7 +163,7 @@ else()
         "LV2 hosting and SoundFont support")
 endif()
 
-function(soundplayer_report_dependency label option_name found)
+function(explayer_report_dependency label option_name found)
     if(NOT ${option_name})
         message(STATUS "  ${label}: disabled by -D${option_name}=OFF")
     elseif(${found})
@@ -174,14 +174,14 @@ function(soundplayer_report_dependency label option_name found)
 endfunction()
 
 message(STATUS "Optional features:")
-soundplayer_report_dependency("libopenmpt (module playback)"
-    SOUNDPLAYER_ENABLE_OPENMPT      OPENMPT_FOUND)
-soundplayer_report_dependency("libxmp (module fallback)"
-    SOUNDPLAYER_ENABLE_XMP          XMP_FOUND)
-soundplayer_report_dependency("lilv (LV2 plugin hosting)"
-    SOUNDPLAYER_ENABLE_LV2          LILV_FOUND)
-soundplayer_report_dependency("FluidSynth (SoundFont playback)"
-    SOUNDPLAYER_ENABLE_FLUIDSYNTH   FLUIDSYNTH_FOUND)
+explayer_report_dependency("libopenmpt (module playback)"
+    EXPLAYER_ENABLE_OPENMPT      OPENMPT_FOUND)
+explayer_report_dependency("libxmp (module fallback)"
+    EXPLAYER_ENABLE_XMP          XMP_FOUND)
+explayer_report_dependency("lilv (LV2 plugin hosting)"
+    EXPLAYER_ENABLE_LV2          LILV_FOUND)
+explayer_report_dependency("FluidSynth (SoundFont playback)"
+    EXPLAYER_ENABLE_FLUIDSYNTH   FLUIDSYNTH_FOUND)
 
 # juce_core compiles its WebInputStream against libcurl (JUCE_USE_CURL is 1 by
 # default), so this one is required rather than optional - report it as such
@@ -192,7 +192,7 @@ else()
     message(WARNING
         "libcurl was not found. juce_core uses curl for juce::URL, so the link step "
         "will fail. Install libcurl(-dev) or set JUCE_USE_CURL=0 in "
-        "SOUNDPLAYER_COMPILE_DEFINITIONS if the app does not need network streams.")
+        "EXPLAYER_COMPILE_DEFINITIONS if the app does not need network streams.")
 endif()
 
 # Applies every detected optional dependency, plus the CLAP headers and the
@@ -201,27 +201,27 @@ endif()
 #
 # Pass NO_CURL for targets that already link libcurl through JUCE itself (the
 # GUI app does, via juce_add_gui_app(... NEEDS_CURL TRUE)).
-function(soundplayer_apply_optional_dependencies target)
+function(explayer_apply_optional_dependencies target)
     cmake_parse_arguments(SP "NO_CURL" "" "" ${ARGN})
 
     if(OPENMPT_FOUND)
         target_link_libraries(${target} PRIVATE PkgConfig::OPENMPT)
-        target_compile_definitions(${target} PRIVATE SOUNDPLAYER_OPENMPT_SUPPORT=1)
+        target_compile_definitions(${target} PRIVATE EXPLAYER_OPENMPT_SUPPORT=1)
     endif()
 
     if(XMP_FOUND)
         target_link_libraries(${target} PRIVATE PkgConfig::XMP)
-        target_compile_definitions(${target} PRIVATE SOUNDPLAYER_XMP_SUPPORT=1)
+        target_compile_definitions(${target} PRIVATE EXPLAYER_XMP_SUPPORT=1)
     endif()
 
     if(LILV_FOUND)
         target_link_libraries(${target} PRIVATE PkgConfig::LILV)
-        target_compile_definitions(${target} PRIVATE SOUNDPLAYER_LV2_SUPPORT=1)
+        target_compile_definitions(${target} PRIVATE EXPLAYER_LV2_SUPPORT=1)
     endif()
 
     if(FLUIDSYNTH_FOUND)
         target_link_libraries(${target} PRIVATE PkgConfig::FLUIDSYNTH)
-        target_compile_definitions(${target} PRIVATE SOUNDPLAYER_FLUIDSYNTH_SUPPORT=1)
+        target_compile_definitions(${target} PRIVATE EXPLAYER_FLUIDSYNTH_SUPPORT=1)
     endif()
 
     if(CURL_FOUND AND NOT SP_NO_CURL)
@@ -229,7 +229,7 @@ function(soundplayer_apply_optional_dependencies target)
     endif()
 
     target_link_libraries(${target} PRIVATE
-        SoundPlayer2ClapHeaders   # CLAP SDK headers for ClapPluginFormat
+        exPlayerClapHeaders   # CLAP SDK headers for ClapPluginFormat
         ${CMAKE_DL_LIBS})         # dlopen() for CLAP/LV2/VST3 discovery
 endfunction()
 
@@ -238,13 +238,15 @@ find_package(Threads REQUIRED)
 # ------------------------------------------------------------------------------
 # Sources
 #
-# SOUNDPLAYER_CORE_SOURCES are the parts both executables need (audio engine,
-# playlist, effects, plugin hosting, exporters). SOUNDPLAYER_APP_SOURCES add
+# EXPLAYER_CORE_SOURCES are the parts both executables need (audio engine,
+# playlist, effects, plugin hosting, exporters). EXPLAYER_APP_SOURCES add
 # the GUI application on top. Headers are listed next to their implementation
 # so IDEs show the whole unit.
 # ------------------------------------------------------------------------------
 
-set(SOUNDPLAYER_CORE_SOURCES
+set(EXPLAYER_CORE_SOURCES
+    Source/Util/AppDataDirectory.h
+    Source/Util/AppDataDirectory.cpp
     Source/Audio/AudioEngine.h
     Source/Audio/AudioEngine.cpp
     Source/Audio/FfmpegAudioFormatReader.h
@@ -324,7 +326,7 @@ set(SOUNDPLAYER_CORE_SOURCES
     Source/Xtp/XtpTransportClock.h
 )
 
-set(SOUNDPLAYER_APP_SOURCES
+set(EXPLAYER_APP_SOURCES
     Source/Main.cpp
     Source/MainComponent.h
     Source/MainComponent.cpp
@@ -411,7 +413,7 @@ set(SOUNDPLAYER_APP_SOURCES
     Source/Visualization/Plugins/VUMeterPlugin.cpp
 )
 
-set(SOUNDPLAYER_TEST_SOURCES
+set(EXPLAYER_TEST_SOURCES
     Source/Tests/FeatureTests.cpp
 )
 # ------------------------------------------------------------------------------
@@ -420,15 +422,15 @@ set(SOUNDPLAYER_TEST_SOURCES
 
 # Applied to our own targets only (JUCE module sources are compiled as part of
 # each target and would otherwise drown the output in upstream warnings).
-function(soundplayer_enable_warnings target)
+function(explayer_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive-)
-        if(SOUNDPLAYER_WARNINGS_AS_ERRORS)
+        if(EXPLAYER_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
         endif()
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-        if(SOUNDPLAYER_WARNINGS_AS_ERRORS)
+        if(EXPLAYER_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
         endif()
     endif()
@@ -438,36 +440,36 @@ endfunction()
 # Application
 # ------------------------------------------------------------------------------
 
-juce_add_gui_app(SoundPlayer2
-    PRODUCT_NAME  "SoundPlayer2"
-    COMPANY_NAME  "SoundPlayer"
-    BUNDLE_ID     "com.soundplayer.soundplayer2"
+juce_add_gui_app(exPlayer
+    PRODUCT_NAME  "exPlayer"
+    COMPANY_NAME  "Exodus"
+    BUNDLE_ID     "com.exodus.explayer"
     VERSION       ${PROJECT_VERSION}   # drives JUCE_APPLICATION_VERSION_STRING
     NEEDS_CURL    TRUE)                # juce::URL needs libcurl on Linux
 
-target_sources(SoundPlayer2 PRIVATE
-    ${SOUNDPLAYER_CORE_SOURCES}
-    ${SOUNDPLAYER_APP_SOURCES})
+target_sources(exPlayer PRIVATE
+    ${EXPLAYER_CORE_SOURCES}
+    ${EXPLAYER_APP_SOURCES})
 
 # JUCE_PLUGINHOST_* select which plugin formats the host can scan for. The same
 # list is used for the test executable, so a format that works in the app is
 # also exercised by the tests.
-set(SOUNDPLAYER_COMPILE_DEFINITIONS
+set(EXPLAYER_COMPILE_DEFINITIONS
     JUCE_WEB_BROWSER=0        # avoids a hard GTK/WebKit dependency on Linux
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=0
     JUCE_PLUGINHOST_LADSPA=0)
 
-target_compile_definitions(SoundPlayer2 PRIVATE
-    ${SOUNDPLAYER_COMPILE_DEFINITIONS}
+target_compile_definitions(exPlayer PRIVATE
+    ${EXPLAYER_COMPILE_DEFINITIONS}
     # getApplicationName()/getApplicationVersion() read these, so the strings
     # shown in "About" and the window title come from project() above.
-    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:SoundPlayer2,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SoundPlayer2,JUCE_VERSION>"
-    JUCE_COMPANY_NAME_STRING="$<TARGET_PROPERTY:SoundPlayer2,JUCE_COMPANY_NAME>")
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:exPlayer,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:exPlayer,JUCE_VERSION>"
+    JUCE_COMPANY_NAME_STRING="$<TARGET_PROPERTY:exPlayer,JUCE_COMPANY_NAME>")
 
-target_link_libraries(SoundPlayer2 PRIVATE
+target_link_libraries(exPlayer PRIVATE
     juce::juce_audio_basics
     juce::juce_audio_devices
     juce::juce_audio_formats
@@ -481,26 +483,26 @@ target_link_libraries(SoundPlayer2 PRIVATE
     juce::juce_gui_basics
     juce::juce_gui_extra)        # CodeEditor/WebBrowser module headers
 
-soundplayer_apply_optional_dependencies(SoundPlayer2 NO_CURL)
-soundplayer_enable_warnings(SoundPlayer2)
+explayer_apply_optional_dependencies(exPlayer NO_CURL)
+explayer_enable_warnings(exPlayer)
 
-target_link_libraries(SoundPlayer2 PRIVATE Threads::Threads)
+target_link_libraries(exPlayer PRIVATE Threads::Threads)
 # ------------------------------------------------------------------------------
 # Feature test executable
 #
-# Shares SOUNDPLAYER_CORE_SOURCES and the optional dependency setup with the
+# Shares EXPLAYER_CORE_SOURCES and the optional dependency setup with the
 # application above, so it always tests the same code and the same features.
 # ------------------------------------------------------------------------------
 
-if(SOUNDPLAYER_BUILD_TESTS)
-    add_executable(SoundPlayer2Tests
-        ${SOUNDPLAYER_CORE_SOURCES}
-        ${SOUNDPLAYER_TEST_SOURCES})
+if(EXPLAYER_BUILD_TESTS)
+    add_executable(exPlayerTests
+        ${EXPLAYER_CORE_SOURCES}
+        ${EXPLAYER_TEST_SOURCES})
 
-    target_compile_definitions(SoundPlayer2Tests PRIVATE
-        ${SOUNDPLAYER_COMPILE_DEFINITIONS})
+    target_compile_definitions(exPlayerTests PRIVATE
+        ${EXPLAYER_COMPILE_DEFINITIONS})
 
-    target_link_libraries(SoundPlayer2Tests PRIVATE
+    target_link_libraries(exPlayerTests PRIVATE
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -512,18 +514,18 @@ if(SOUNDPLAYER_BUILD_TESTS)
         juce::juce_graphics
         juce::juce_gui_basics)
 
-    soundplayer_apply_optional_dependencies(SoundPlayer2Tests)
-    soundplayer_enable_warnings(SoundPlayer2Tests)
+    explayer_apply_optional_dependencies(exPlayerTests)
+    explayer_enable_warnings(exPlayerTests)
 
-    target_link_libraries(SoundPlayer2Tests PRIVATE Threads::Threads)
+    target_link_libraries(exPlayerTests PRIVATE Threads::Threads)
 
     # Also expose the suite to CTest ("ctest --test-dir build"), which keeps
     # the single test binary usable on its own as well.
     include(CTest)
 
     if(BUILD_TESTING)
-        add_test(NAME SoundPlayer2.Features COMMAND SoundPlayer2Tests)
-        set_tests_properties(SoundPlayer2.Features PROPERTIES TIMEOUT 600)
+        add_test(NAME exPlayer.Features COMMAND exPlayerTests)
+        set_tests_properties(exPlayer.Features PROPERTIES TIMEOUT 600)
     endif()
 endif()
 
@@ -540,25 +542,25 @@ include(GNUInstallDirs)
 #
 #     cmake --install build --component Runtime --component DesktopIntegration
 #
-install(TARGETS SoundPlayer2
+install(TARGETS exPlayer
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT Runtime)
 
-if(UNIX AND NOT APPLE AND SOUNDPLAYER_INSTALL_DESKTOP_FILES)
-    install(FILES packaging/soundplayer2.desktop
+if(UNIX AND NOT APPLE AND EXPLAYER_INSTALL_DESKTOP_FILES)
+    install(FILES packaging/explayer.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
         COMPONENT DesktopIntegration)
 
-    install(FILES packaging/soundplayer2.svg
+    install(FILES packaging/explayer.svg
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
         COMPONENT DesktopIntegration)
 
-    install(FILES packaging/soundplayer2-mime.xml
+    install(FILES packaging/explayer-mime.xml
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/mime/packages
-        RENAME soundplayer2.xml
+        RENAME explayer.xml
         COMPONENT DesktopIntegration)
 
-    # packaging/soundplayer2.desktop launches "soundplayer2", so provide that
+    # packaging/explayer.desktop launches "explayer", so provide that
     # name as a symlink next to the real binary (the desktop file predates the
     # CMake install rules).
     #
@@ -567,13 +569,13 @@ if(UNIX AND NOT APPLE AND SOUNDPLAYER_INSTALL_DESKTOP_FILES)
     # created when the binary itself was installed - component installs can be
     # run in any order or on their own.
     install(CODE "
-        set(soundplayer_bin_dir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
-        set(soundplayer_link \"\${soundplayer_bin_dir}/soundplayer2\")
-        if(EXISTS \"\${soundplayer_bin_dir}/SoundPlayer2\")
-            message(STATUS \"Creating launcher symlink: \${soundplayer_link}\")
-            file(REMOVE \"\${soundplayer_link}\")
+        set(explayer_bin_dir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+        set(explayer_link \"\${explayer_bin_dir}/explayer\")
+        if(EXISTS \"\${explayer_bin_dir}/exPlayer\")
+            message(STATUS \"Creating launcher symlink: \${explayer_link}\")
+            file(REMOVE \"\${explayer_link}\")
             execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
-                SoundPlayer2 \"\${soundplayer_link}\")
+                exPlayer \"\${explayer_link}\")
         else()
             message(STATUS
                 \"Skipping launcher symlink: install the Runtime component first\")
@@ -588,20 +590,20 @@ endif()
 # file simply never gets compiled. Warn about it at configure time instead.
 # ------------------------------------------------------------------------------
 
-file(GLOB_RECURSE _soundplayer_source_files
+file(GLOB_RECURSE _explayer_source_files
     RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h")
 
-set(_soundplayer_listed_files
-    ${SOUNDPLAYER_CORE_SOURCES}
-    ${SOUNDPLAYER_APP_SOURCES}
-    ${SOUNDPLAYER_TEST_SOURCES})
+set(_explayer_listed_files
+    ${EXPLAYER_CORE_SOURCES}
+    ${EXPLAYER_APP_SOURCES}
+    ${EXPLAYER_TEST_SOURCES})
 
-foreach(_soundplayer_file IN LISTS _soundplayer_source_files)
-    if(NOT _soundplayer_file IN_LIST _soundplayer_listed_files)
+foreach(_explayer_file IN LISTS _explayer_source_files)
+    if(NOT _explayer_file IN_LIST _explayer_listed_files)
         message(WARNING
-            "${_soundplayer_file} is not listed in the source lists in CMakeLists.txt "
+            "${_explayer_file} is not listed in the source lists in CMakeLists.txt "
             "and will not be compiled")
     endif()
 endforeach()

@@ -1,4 +1,5 @@
 #include "MicRecorderComponent.h"
+#include "../Util/AppDataDirectory.h"
 
 namespace
 {
@@ -630,8 +631,7 @@ void MicRecorderComponent::showStatus(const juce::String& text)
 
 static juce::File getChannelModeFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("mic_recorder.xml");
 }
 
