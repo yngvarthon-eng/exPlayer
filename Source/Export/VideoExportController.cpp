@@ -22,14 +22,17 @@ VideoExportController::~VideoExportController()
     exporter.reset();
 }
 
-void VideoExportController::showExportDialog()
+void VideoExportController::showExportDialog(int highlightedIndex)
 {
-    auto* item = playlistManager.getCurrentItem();
+    const auto& items = playlistManager.getItems();
+    const auto* item = juce::isPositiveAndBelow(highlightedIndex, items.size())
+                           ? &items.getReference(highlightedIndex)
+                           : playlistManager.getCurrentItem();
 
     if (item == nullptr || item->isStream)
     {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Export Video",
-            "Load a local audio file or .xtp/.xtd song first.");
+            "Select a local audio file or .xtp/.xtd song in the playlist first.");
         return;
     }
 
