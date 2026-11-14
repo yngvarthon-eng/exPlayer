@@ -25,6 +25,10 @@ public:
     void cellDoubleClicked(int rowNumber, int columnId, const juce::MouseEvent&) override;
     void deleteKeyPressed(int lastRowSelected) override;
 
+    // The row the user has highlighted in the table, or -1. This only changes
+    // when the user clicks, so it can differ from the playing track.
+    int getSelectedRow() const { return playlistTable->getSelectedRow(); }
+
 private:
     void addFilesFromDialog();
     void addStreamFromDialog();

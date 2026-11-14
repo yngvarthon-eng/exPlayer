@@ -304,7 +304,10 @@ void MainComponent::addFilesAndSelectFirstNew (const juce::Array<juce::File>& fi
 
 void MainComponent::showExportVideoDialog()
 {
-    videoExport->showExportDialog();
+    // Export what the user highlighted in the playlist, so a track can be
+    // exported without playing it first. A collapsed playlist hides the
+    // highlight, so fall back to the current track then.
+    videoExport->showExportDialog (playlistEditor->isVisible() ? playlistEditor->getSelectedRow() : -1);
 }
 
 void MainComponent::showExportPlaylistVideoDialog()
