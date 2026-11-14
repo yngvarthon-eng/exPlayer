@@ -192,7 +192,8 @@ To extend SoundPlayer2:
 
 ## License
 
-TBD - Choose your preferred license (MIT, GPL, Apache 2.0)
+MIT – see [LICENSE](LICENSE). JUCE and the optional libraries (libopenmpt, libxmp, lilv,
+FluidSynth) come under their own licenses.
 
 ## References
 
