@@ -24,6 +24,7 @@ public:
     // dialog" is routed out through this callback instead.
     std::function<void()> onRequestVideoExport;
     std::function<void()> onRequestPlaylistVideoExport;
+    std::function<void()> onRequestMicRecorder;
 
 private:
     void updatePlayButton();

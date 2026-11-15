@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
 
 #include "XtpInstrumentVoice.h"
 #include <juce_core/juce_core.h>
@@ -47,4 +47,4 @@ private:
 
 } // namespace xtp
 
-#endif // SOUNDPLAYER_FLUIDSYNTH_SUPPORT
+#endif // EXPLAYER_FLUIDSYNTH_SUPPORT

@@ -1,4 +1,4 @@
-#ifdef SOUNDPLAYER_LV2_SUPPORT
+#ifdef EXPLAYER_LV2_SUPPORT
 
 #include "Lv2PluginFormat.h"
 #include "SidechainReceiver.h"
@@ -689,4 +689,4 @@ void Lv2PluginFormat::createPluginInstance(
     callback(std::move(instance), {});
 }
 
-#endif // SOUNDPLAYER_LV2_SUPPORT
+#endif // EXPLAYER_LV2_SUPPORT

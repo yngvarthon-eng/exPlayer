@@ -1,9 +1,9 @@
 <!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
 
-# SoundPlayer2 Development Instructions
+# exPlayer Development Instructions
 
 ## Project Overview
-SoundPlayer2 is a JUCE-based audio player supporting standard and module audio formats with playlist management, 10-band equalizer, and real-time visualization.
+exPlayer is a JUCE-based audio player supporting standard and module audio formats with playlist management, 10-band equalizer, and real-time visualization.
 
 ## Architecture Principles
 
@@ -41,7 +41,7 @@ SoundPlayer2 is a JUCE-based audio player supporting standard and module audio f
 
 ### Local Build
 ```bash
-cd /home/yngvar/visualcode/workspace/soundplayer2
+cd /home/yngvar/visualcode/workspace/explayer
 mkdir -p build && cd build
 cmake ..
 cmake --build . --config Debug
@@ -54,7 +54,7 @@ cmake --build . --config Debug
 Enable module support:
 ```bash
 sudo apt-get install libmodplug-dev  # Ubuntu/Debian
-# CMake will auto-detect; optional compilation flag SOUNDPLAYER_MODPLUG_SUPPORT
+# CMake will auto-detect; optional compilation flag EXPLAYER_MODPLUG_SUPPORT
 ```
 
 ## Common Development Tasks

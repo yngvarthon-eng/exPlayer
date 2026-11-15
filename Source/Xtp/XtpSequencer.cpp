@@ -37,6 +37,7 @@ void Sequencer::reset(int numChannels)
     channelControl.assign((size_t) std::max(0, numChannels), ChannelControlState {});
     channelNote.assign((size_t) std::max(0, numChannels), ChannelNote {});
     channelVolume.assign((size_t) std::max(0, numChannels), 1.0f);
+    channelSilenced.assign((size_t) std::max(0, numChannels), false);
     rowDelayTargetRow = kInvalidLoopRow;
     rowDelayRowsRemaining = 0;
 }
@@ -45,6 +46,12 @@ void Sequencer::setChannelVolumes(const std::vector<float>& volumes)
 {
     for (size_t ch = 0; ch < channelVolume.size() && ch < volumes.size(); ++ch)
         channelVolume[ch] = volumes[ch];
+}
+
+void Sequencer::setChannelSilenced(const std::vector<bool>& silenced)
+{
+    for (size_t ch = 0; ch < channelSilenced.size() && ch < silenced.size(); ++ch)
+        channelSilenced[ch] = silenced[ch];
 }
 
 std::uint8_t Sequencer::effectiveVelocity(int channel, const ChannelNote& note, std::uint8_t velocity) const
@@ -65,6 +72,8 @@ std::uint8_t Sequencer::effectiveVelocity(int channel, const ChannelNote& note, 
 
 void Sequencer::dispatchNoteOn(int channel, ChannelNote& note, NoteSink& sink, bool retrigger)
 {
+    if (isSilenced(channel))
+        return;
     const std::uint8_t vel = effectiveVelocity(channel, note, note.velocity);
     note.currentVelocity = vel;
     sink.noteOn(note.instrument, note.sample, note.midiNote, vel, retrigger);
@@ -438,13 +447,16 @@ void Sequencer::onTick(const Pattern& pattern, TransportClock& transport, NoteSi
 
         // Unconditional per-tick re-issue (retrigger=false), matching exTracker's
         // own behavior of refreshing every held note every tick.
+        if (isSilenced(channel))
+            continue;
         const std::uint8_t vel = effectiveVelocity(channel, ns, outputVelocity);
         sink.noteOn(ns.instrument, ns.sample, ns.midiNote, vel, false);
     }
 
-    for (auto& ns : channelNote)
+    for (size_t channel = 0; channel < channelNote.size(); ++channel)
     {
-        if (!ns.fadingOut || !ns.active)
+        auto& ns = channelNote[channel];
+        if (!ns.fadingOut || !ns.active || isSilenced((int) channel))
             continue;
 
         if (ns.currentVelocity <= ns.fadeDecrement)

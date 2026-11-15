@@ -1,19 +1,19 @@
-#if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+#if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
 
 #include "ModPlugFormat.h"
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 #include <libopenmpt/libopenmpt.hpp>
 #endif
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+#ifdef EXPLAYER_XMP_SUPPORT
 #include <xmp.h>
 #endif
 
 #include <cstdint>
 #include <cstdio>
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 
 // ---------------------------------------------------------------------------
 // OpenMptAudioFormatReader
@@ -55,6 +55,7 @@ OpenMptAudioFormatReader::OpenMptAudioFormatReader(juce::InputStream* stream,
     try
     {
         mod = std::make_unique<openmpt::module>(fileData, std::cerr);
+        numModuleChannels = mod->get_num_channels();
     }
     catch (const openmpt::exception&)
     {
@@ -98,14 +99,31 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
         double seekSecs = startSampleInFile / (double)kSampleRate;
         mod->set_position_seconds(seekSecs);
         currentSample = startSampleInFile;
+        publishPosition(true);
     }
 
-    // Decode into separate left/right float buffers
+    // Decode into separate left/right float buffers. Decoding goes in small
+    // pieces so a row change is pinned to within kPositionStep frames -- the
+    // pattern viewer scrolls smoothly from that, live and in video export
+    // (which decodes a whole video frame per call).
     decodeLeft.resize((size_t)numSamples);
     decodeRight.resize((size_t)numSamples);
 
-    std::size_t framesDecoded = mod->read(kSampleRate, (std::size_t)numSamples,
-                                          decodeLeft.data(), decodeRight.data());
+    constexpr int kPositionStep = 128;
+    std::size_t framesDecoded = 0;
+    while ((int)framesDecoded < numSamples)
+    {
+        const std::size_t want = (std::size_t)juce::jmin(kPositionStep, numSamples - (int)framesDecoded);
+        const std::size_t got = mod->read(kSampleRate, want,
+                                          decodeLeft.data() + framesDecoded,
+                                          decodeRight.data() + framesDecoded);
+        framesDecoded += got;
+        currentSample += (juce::int64)got;
+        publishPosition(false);
+        publishChannelLevels();
+        if (got < want)
+            break; // end of module
+    }
 
     // Zero the tail if end of module was reached
     if ((int)framesDecoded < numSamples)
@@ -124,23 +142,78 @@ bool OpenMptAudioFormatReader::readSamples(int* const* destSamples,
         std::memcpy(dst, channels[srcCh], (size_t)numSamples * sizeof(float));
     }
 
-    currentSample += (juce::int64)framesDecoded;
     return true;
 }
 
-int OpenMptAudioFormatReader::getCurrentRow() const
+void OpenMptAudioFormatReader::publishChannelLevels()
 {
-    return mod ? mod->get_current_row() : -1;
+    const int n = juce::jmin(numModuleChannels, kMaxLevelChannels);
+    for (int c = 0; c < n; ++c)
+    {
+        const float level = juce::jmax(mod->get_current_channel_vu_left(c), mod->get_current_channel_vu_right(c));
+        auto& peak = channelPeaks[(size_t) c];
+        float seen = peak.load(std::memory_order_relaxed);
+        while (level > seen && ! peak.compare_exchange_weak(seen, level, std::memory_order_relaxed)) {}
+    }
 }
 
-int OpenMptAudioFormatReader::getCurrentPattern() const
+int OpenMptAudioFormatReader::takeChannelPeaks(float* dest, int maxChannels)
 {
-    return mod ? mod->get_current_pattern() : -1;
+    const int n = juce::jmin(numModuleChannels, kMaxLevelChannels);
+    for (int c = 0; c < juce::jmin(n, maxChannels); ++c)
+        dest[c] = channelPeaks[(size_t) c].exchange(0.0f, std::memory_order_relaxed);
+    return n;
 }
 
-#endif // SOUNDPLAYER_OPENMPT_SUPPORT
+void OpenMptAudioFormatReader::publishPosition(bool afterSeek)
+{
+    const int row     = mod->get_current_row();
+    const int pattern = mod->get_current_pattern();
+    const int order   = mod->get_current_order();
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+    const bool rowChanged = row != posRow.load() || pattern != posPattern.load() || order != posOrder.load();
+    if (afterSeek)
+    {
+        rowStartSample.store(-1);
+    }
+    else if (rowChanged)
+    {
+        const juce::int64 previousStart = rowStartSample.load();
+        const juce::int64 length = previousStart >= 0 ? currentSample - previousStart : 0;
+        if (length > 0 && length < (juce::int64)kSampleRate * 4)
+        {
+            rowLengthSamples.store(length);
+        }
+        else
+        {
+            // No previous row measured yet: classic tracker timing, 2.5/tempo s per tick.
+            const double tempo = mod->get_current_tempo2();
+            const int speed = mod->get_current_speed();
+            if (tempo > 0.0 && speed > 0)
+                rowLengthSamples.store((juce::int64)(speed * 2.5 / tempo * kSampleRate));
+        }
+        rowStartSample.store(currentSample);
+    }
+
+    decodedSample.store(currentSample);
+    posRow.store(row);
+    posPattern.store(pattern);
+    posOrder.store(order);
+}
+
+double OpenMptAudioFormatReader::getCurrentRowFraction() const
+{
+    const juce::int64 start = rowStartSample.load();
+    const juce::int64 length = rowLengthSamples.load();
+    if (start < 0 || length <= 0)
+        return 0.0;
+    const double fraction = (double)(decodedSample.load() - start) / (double)length;
+    return juce::jlimit(0.0, 0.999, fraction);
+}
+
+#endif // EXPLAYER_OPENMPT_SUPPORT
+
+#ifdef EXPLAYER_XMP_SUPPORT
 
 class XmpAudioFormatReader : public juce::AudioFormatReader
 {
@@ -258,7 +331,7 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(XmpAudioFormatReader)
 };
 
-#endif // SOUNDPLAYER_XMP_SUPPORT
+#endif // EXPLAYER_XMP_SUPPORT
 
 // ---------------------------------------------------------------------------
 // OpenMptAudioFormat
@@ -313,7 +386,7 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
         return nullptr;
     }
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     {
         juce::MemoryInputStream openMptStream(moduleData.getData(), moduleData.getSize(), false);
         auto* openMptReader = new OpenMptAudioFormatReader(&openMptStream, getFormatName());
@@ -330,7 +403,7 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
     }
 #endif
 
-#ifdef SOUNDPLAYER_XMP_SUPPORT
+#ifdef EXPLAYER_XMP_SUPPORT
     {
         auto* xmpReader = new XmpAudioFormatReader(moduleData.getData(), moduleData.getSize(), getFormatName());
         if (xmpReader->lengthInSamples > 0)
@@ -350,4 +423,4 @@ juce::AudioFormatReader* OpenMptAudioFormat::createReaderFor(juce::InputStream* 
     return nullptr;
 }
 
-#endif // SOUNDPLAYER_OPENMPT_SUPPORT || SOUNDPLAYER_XMP_SUPPORT
+#endif // EXPLAYER_OPENMPT_SUPPORT || EXPLAYER_XMP_SUPPORT

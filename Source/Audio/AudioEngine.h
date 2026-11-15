@@ -14,7 +14,7 @@
 #include "../Xtp/XtpSequencerSource.h"
 
 class PlaylistManager;
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
 class OpenMptAudioFormatReader;
 #endif
 
@@ -118,6 +118,13 @@ public:
     void  setMasterGain(float gain) { masterGain.store(juce::jlimit(0.0f, 1.0f, gain)); }
     float getMasterGain() const     { return masterGain.load(); }
 
+    // An extra source mixed into the output after the EQ/FX chain (so it is
+    // heard dry) but before master volume -- the mic recorder previews takes
+    // through this. Pass nullptr to remove it. The engine prepares the source
+    // against the live device; the caller keeps ownership and must remove it
+    // before destroying it.
+    void setAuxiliarySource(juce::AudioSource* source);
+
     // Recording
     void startRecording(const juce::File& outputFile);
     void stopRecording();
@@ -134,6 +141,14 @@ public:
     // Live playback position within the module (returns -1 if not applicable)
     int getCurrentPatternRow()   const;
     int getCurrentPatternIndex() const;
+    // Row, fraction into the row and song-order position, for smooth scrolling.
+    PatternPlayPosition getPatternPlayPosition() const;
+
+    // Per-channel output levels of the playing module (peak since the last
+    // call, ~0..1), for the fullscreen sequencer's scopes. Returns the number
+    // of channels written to `levels`; 0 when the current track can't report
+    // them (not a module, or an .xtp song).
+    int takeModuleChannelLevels(std::vector<float>& levels);
 
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -204,6 +219,11 @@ private:
 
     std::atomic<float> masterGain { 1.0f };
 
+    // See setAuxiliarySource(). The audio thread only try-locks this.
+    juce::CriticalSection auxSourceLock;
+    juce::AudioSource* auxSource = nullptr;
+    juce::AudioBuffer<float> auxBuffer;
+
     // Background stream loader (stoppable, unlike juce::Thread::launch)
     struct StreamLoader : public juce::Thread
     {
@@ -241,7 +261,7 @@ private:
 
     // Non-owning pointer to the current openmpt reader (owned by readerSource)
     // Valid only while readerSource is alive and lastFileWasModule is true
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     OpenMptAudioFormatReader* openMptReader = nullptr;
 #endif
 

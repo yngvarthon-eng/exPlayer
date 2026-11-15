@@ -22,10 +22,12 @@ public:
                           VisualizationComponent& visualizer);
     ~VideoExportController();
 
-    // Explains why and returns immediately when there is nothing exportable
-    // (no track loaded, a network stream, or no ffmpeg on PATH); otherwise opens
-    // the save dialog followed by the render settings dialog.
-    void showExportDialog();
+    // Exports the playlist row at highlightedIndex when it is valid, otherwise
+    // the current (playing) track. Explains why and returns immediately when
+    // there is nothing exportable (no track, a network stream, or no ffmpeg on
+    // PATH); otherwise opens the save dialog followed by the render settings
+    // dialog.
+    void showExportDialog(int highlightedIndex = -1);
 
     // Advances the progress window, and closes it with a result message once the
     // export has finished. Call from a timer while an export is running.

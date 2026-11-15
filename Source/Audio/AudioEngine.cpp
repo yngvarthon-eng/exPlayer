@@ -45,7 +45,7 @@ std::unique_ptr<juce::AudioFormatManager> AudioEngine::createStandaloneFormatMan
 {
     auto fm = std::make_unique<juce::AudioFormatManager>();
     fm->registerBasicFormats();
-#if defined(SOUNDPLAYER_OPENMPT_SUPPORT) || defined(SOUNDPLAYER_XMP_SUPPORT)
+#if defined(EXPLAYER_OPENMPT_SUPPORT) || defined(EXPLAYER_XMP_SUPPORT)
     fm->registerFormat(new OpenMptAudioFormat(), false);
 #endif
     return fm;
@@ -225,7 +225,7 @@ void AudioEngine::loadTrack(const juce::File& file)
     transportSource->stop();
     transportSource->setSource(nullptr);
     transportSource->setPosition(0.0);  // reset so new track always starts from zero
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr; // clear before readerSource.reset() deletes the reader
 #endif
     readerSource.reset();
@@ -262,7 +262,7 @@ void AudioEngine::loadTrack(const juce::File& file)
                 file.getFileName().toRawUTF8(), reader->sampleRate,
                 (int)reader->numChannels, reader->lengthInSamples / reader->sampleRate);
         readerSource = std::make_unique<MultiChannelAudioFormatReaderSource>(reader, true);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
         if (lastFileWasModule)
             openMptReader = dynamic_cast<OpenMptAudioFormatReader*>(reader);
 #endif
@@ -278,7 +278,7 @@ void AudioEngine::loadXtpSequence(const juce::File& file)
     transportSource->stop();
     transportSource->setSource(nullptr);
     transportSource->setPosition(0.0);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -341,7 +341,7 @@ void AudioEngine::loadVideoInternal(const juce::File& file, int audioTrackIndex,
     // loadTrack/loadXtpSequence/loadStream).
     transportSource->stop();
     transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -438,7 +438,7 @@ void AudioEngine::loadStream(const juce::String& url, bool reconnecting, int rec
     // Tear down current playback on the message thread (safe to do here).
     transportSource->stop();
     transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     openMptReader = nullptr;
 #endif
     readerSource.reset();
@@ -889,6 +889,25 @@ bool AudioEngine::updateAudioDevice()
     return true;
 }
 
+// ---- Auxiliary source ----
+
+void AudioEngine::setAuxiliarySource(juce::AudioSource* source)
+{
+    if (source != nullptr)
+        if (auto* device = deviceManager->getCurrentAudioDevice())
+            source->prepareToPlay(device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
+
+    juce::AudioSource* previous = nullptr;
+    {
+        const juce::ScopedLock sl(auxSourceLock);
+        previous = auxSource;
+        auxSource = source;
+    }
+
+    if (previous != nullptr && previous != source)
+        previous->releaseResources();
+}
+
 // ---- Recording ----
 
 void AudioEngine::startRecording(const juce::File& outputFile)
@@ -969,6 +988,11 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     equalizer.prepare(sampleRate, bufferSize, activeOutputChannels.load());
     pluginChain.prepare(sampleRate, bufferSize);
     midiCollector.reset(sampleRate);
+
+    auxBuffer.setSize(2, bufferSize);
+    const juce::ScopedLock sl(auxSourceLock);
+    if (auxSource != nullptr)
+        auxSource->prepareToPlay(bufferSize, sampleRate);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -1027,6 +1051,21 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                                      &activeOutputChannelNames);
     }
 
+    // Mic recorder preview: mixed in after the chain, so it is heard dry.
+    {
+        const juce::ScopedTryLock sl(auxSourceLock);
+        if (sl.isLocked() && auxSource != nullptr)
+        {
+            auxBuffer.setSize(2, numSamples, false, false, true);
+            juce::AudioSourceChannelInfo auxInfo(&auxBuffer, 0, numSamples);
+            auxSource->getNextAudioBlock(auxInfo);
+
+            const int mixChannels = juce::jmin(2, numOutputChannels);
+            for (int ch = 0; ch < mixChannels; ++ch)
+                outputBuffer.addFrom(ch, 0, auxBuffer, ch, 0, numSamples);
+        }
+    }
+
     outputBuffer.applyGain(masterGain.load());
 
     // Requantize to the selected output bit depth (dithered). Done last so the
@@ -1058,7 +1097,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
 int AudioEngine::getCurrentPatternRow() const
 {
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
         return openMptReader->getCurrentRow();
 #endif
@@ -1069,13 +1108,53 @@ int AudioEngine::getCurrentPatternRow() const
 
 int AudioEngine::getCurrentPatternIndex() const
 {
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     if (openMptReader != nullptr)
         return openMptReader->getCurrentPattern();
 #endif
     if (xtpSource != nullptr)
         return xtpSource->getCurrentPatternIndex();
     return -1;
+}
+
+PatternPlayPosition AudioEngine::getPatternPlayPosition() const
+{
+    PatternPlayPosition pos;
+#ifdef EXPLAYER_OPENMPT_SUPPORT
+    if (openMptReader != nullptr)
+    {
+        pos.pattern       = openMptReader->getCurrentPattern();
+        pos.row           = openMptReader->getCurrentRow();
+        pos.rowFraction   = openMptReader->getCurrentRowFraction();
+        pos.orderPosition = openMptReader->getCurrentOrder();
+        pos.rowSeconds    = openMptReader->getCurrentRowSeconds();
+        return pos;
+    }
+#endif
+    if (xtpSource != nullptr)
+    {
+        pos.pattern       = xtpSource->getCurrentPatternIndex();
+        pos.row           = xtpSource->getCurrentRow();
+        pos.rowFraction   = xtpSource->getCurrentRowFraction();
+        pos.orderPosition = xtpSource->getCurrentOrderPosition();
+        pos.rowSeconds    = xtpSource->getCurrentRowSeconds();
+    }
+    return pos;
+}
+
+int AudioEngine::takeModuleChannelLevels(std::vector<float>& levels)
+{
+#ifdef EXPLAYER_OPENMPT_SUPPORT
+    if (openMptReader != nullptr)
+    {
+        levels.resize((size_t) OpenMptAudioFormatReader::kMaxLevelChannels);
+        const int n = openMptReader->takeChannelPeaks(levels.data(), (int) levels.size());
+        levels.resize((size_t) n);
+        return n;
+    }
+#endif
+    levels.clear();
+    return 0;
 }
 
 // ---- ChangeListener ----
@@ -1091,7 +1170,7 @@ void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster*)
             // Playlist was cleared
             transportSource->stop();
             transportSource->setSource(nullptr);
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
             openMptReader = nullptr;
 #endif
             readerSource.reset();

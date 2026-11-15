@@ -4,6 +4,7 @@
 #include "../Playlist/PlaylistManager.h"
 #include "../Audio/AudioEngine.h"
 #include "../Audio/MultiChannelAudioFormatReaderSource.h"
+#include "../Audio/ModPlugFormat.h"
 #include "../Effects/Equalizer.h"
 #include "../Xtp/XtpSong.h"
 #include "../Xtp/XtpSequencer.h"
@@ -17,8 +18,15 @@
 #include "../Video/FfmpegVideoFrameDecoder.h"
 #include "../Video/SubtitleTrack.h"
 #include "../Audio/FfmpegVideoAudioFormatReader.h"
+#include "../Playlist/AudioFileCollector.h"
+#include "../Recorder/MicClip.h"
+#include "../Recorder/MicRecorder.h"
+#include "../Recorder/ClipPlaybackSource.h"
+#include "../Recorder/ClipEffects.h"
 #include <thread>
 #include <chrono>
+#include <stdexcept>
+#include <string>
 
 void testPlaylistManager()
 {
@@ -634,6 +642,145 @@ void testXtpSequencerRowJump()
     std::cout << std::endl;
 }
 
+void testXtpPlayPositionForPatternViewer()
+{
+    std::cout << "=== Testing Xtp play position (row fraction, song order) ===" << std::endl;
+
+    // Two 2-row patterns played in order 0, 1 -- the pattern viewer's centered
+    // view needs the fraction into each row and the song-order position.
+    juce::File songFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("sp2_xtp_play_position_test.xtp");
+    songFile.replaceWithText(
+        "EXTRACKER_SONG_V1 2 1 2 2 0 0\n"
+        "PATTERN 0\n"
+        "0 0 1 60 0 65535 0 100 0 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "PATTERN 1\n"
+        "0 0 1 62 0 65535 0 100 0 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "SONG_ORDER 0 1\n"
+        "TRANSPORT 120 4 4\n");
+
+    XtpSequencerSource source(songFile, XtpSequencerSource::kRenderSampleRate);
+    if (!source.isValid())
+        throw std::runtime_error("play-position fixture did not load: " + source.getLoadError().toStdString());
+    source.prepareToPlay(64, XtpSequencerSource::kRenderSampleRate);
+    source.setNextReadPosition(0);
+
+    ModulePatternData data;
+    if (!data.loadFromXtpSong(source.getSong()) || data.getOrder() != std::vector<int> { 0, 1 })
+        throw std::runtime_error("ModulePatternData did not take the .xtp song order");
+    std::cout << "✓ ModulePatternData carries the song order" << std::endl;
+
+    // 120 BPM, 4 ticks/beat, 4 ticks/row: 0.125 s per tick, 0.5 s per row.
+    juce::AudioBuffer<float> buffer(2, 64);
+    double lastPosition = -1.0;
+    bool sawOrder1 = false;
+    for (int block = 0; block < (int) (1.9 * XtpSequencerSource::kRenderSampleRate / 64); ++block)
+    {
+        juce::AudioSourceChannelInfo info(&buffer, 0, 64);
+        source.getNextAudioBlock(info);
+
+        const int order = source.getCurrentOrderPosition();
+        const double fraction = source.getCurrentRowFraction();
+        if (fraction < 0.0 || fraction >= 1.0)
+            throw std::runtime_error("row fraction out of range: " + std::to_string(fraction));
+        if (std::abs(source.getCurrentRowSeconds() - 0.5) > 1e-6)
+            throw std::runtime_error("row length should be 0.5 s, got " + std::to_string(source.getCurrentRowSeconds()));
+
+        // Song position in rows: order * 2 + row + fraction, rising steadily.
+        const double songPosition = order * 2 + source.getCurrentRow() + fraction;
+        const double expected = (block + 1) * 64 / XtpSequencerSource::kRenderSampleRate / 0.5;
+        if (songPosition < lastPosition - 1e-9 || std::abs(songPosition - expected) > 0.02)
+            throw std::runtime_error("position " + std::to_string(songPosition) + " at block " + std::to_string(block)
+                                     + ", expected " + std::to_string(expected));
+        lastPosition = songPosition;
+        sawOrder1 = sawOrder1 || (order == 1 && source.getCurrentPatternIndex() == 1);
+    }
+    if (!sawOrder1)
+        throw std::runtime_error("never reached song order position 1");
+    std::cout << "✓ Row + fraction tracks the rendered time through both patterns" << std::endl;
+    std::cout << "✓ Song-order position follows the pattern change" << std::endl;
+
+    songFile.deleteFile();
+    std::cout << std::endl;
+}
+
+#ifdef EXPLAYER_OPENMPT_SUPPORT
+void testOpenMptPlayPositionForPatternViewer()
+{
+    std::cout << "=== Testing libopenmpt play position (row fraction, song order) ===" << std::endl;
+
+    // A minimal 4-channel ProTracker MOD, no samples: two 64-row patterns
+    // played in order 0, 1 at the default speed 6 / tempo 125 = 0.12 s per row.
+    juce::MemoryOutputStream mod;
+    mod.writeRepeatedByte(0, 20);              // title
+    for (int i = 0; i < 31; ++i)
+    {
+        mod.writeRepeatedByte(0, 22 + 2 + 1); // name, length, finetune
+        mod.writeByte(64);                    // volume
+        mod.writeRepeatedByte(0, 4);          // loop start/length
+    }
+    mod.writeByte(2);                          // song length
+    mod.writeByte(127);                        // restart
+    mod.writeByte(0);
+    mod.writeByte(1);
+    mod.writeRepeatedByte(0, 126);             // rest of the order list
+    mod.write("M.K.", 4);
+    mod.writeRepeatedByte(0, 2 * 64 * 4 * 4);  // two empty patterns
+
+    juce::File modFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("sp2_openmpt_play_position_test.mod");
+    modFile.replaceWithData(mod.getData(), mod.getDataSize());
+
+    ModulePatternData data;
+    if (!data.loadFromFile(modFile) || data.getOrder().size() < 2
+        || data.getOrder()[0] != 0 || data.getOrder()[1] != 1)
+        throw std::runtime_error("ModulePatternData did not read the MOD order list");
+    std::cout << "✓ ModulePatternData reads the module's order list" << std::endl;
+
+    OpenMptAudioFormat format;
+    std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(new juce::FileInputStream(modFile), true));
+    auto* openMpt = dynamic_cast<OpenMptAudioFormatReader*>(reader.get());
+    if (openMpt == nullptr)
+        throw std::runtime_error("MOD fixture did not open through libopenmpt");
+
+    const double rate = reader->sampleRate;
+    constexpr int kBlock = 1600; // one 30 fps video frame at 48 kHz, as VideoExporter decodes
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    juce::int64 position = 0;
+    double lastPosition = -1.0;
+    bool sawOrder1 = false;
+    while (position < (juce::int64) (14.0 * rate))
+    {
+        reader->read(&buffer, 0, kBlock, position, true, true);
+        position += kBlock;
+
+        const double fraction = openMpt->getCurrentRowFraction();
+        if (fraction < 0.0 || fraction >= 1.0)
+            throw std::runtime_error("row fraction out of range: " + std::to_string(fraction));
+
+        const int order = openMpt->getCurrentOrder();
+        const double songPosition = order * 64 + openMpt->getCurrentRow() + fraction;
+        const double expected = position / rate / 0.12;
+        // Row changes are pinned to 128 frames (~0.02 rows) by the reader.
+        if (songPosition < lastPosition - 1e-9 || std::abs(songPosition - expected) > 0.05)
+            throw std::runtime_error("position " + std::to_string(songPosition) + " at "
+                                     + std::to_string(position / rate) + " s, expected " + std::to_string(expected));
+        lastPosition = songPosition;
+        sawOrder1 = sawOrder1 || (order == 1 && openMpt->getCurrentPattern() == 1);
+    }
+    if (!sawOrder1)
+        throw std::runtime_error("never reached order position 1");
+    std::cout << "✓ Row + fraction tracks the decoded time, per video-frame-sized read" << std::endl;
+    std::cout << "✓ Order position follows the pattern change" << std::endl;
+
+    reader.reset();
+    modFile.deleteFile();
+    std::cout << std::endl;
+}
+#endif
+
 void testXtpSequencerChannelVolume()
 {
     std::cout << "=== Testing Xtp Sequencer Channel Volume ===" << std::endl;
@@ -809,6 +956,106 @@ namespace
 // FeatureTests.cpp is built with NDEBUG defined, which makes assert() a complete
 // no-op -- including never evaluating its argument -- so assert(sideEffectingCall())
 // would silently skip the call entirely rather than just skip the check.
+// Songs saved by current exTracker ("unified instruments"): notes name an
+// instrument slot (0-255) whose builtin.sample is linked to a bank slot by
+// INSTR_SAMPLE_SLOT, with no per-note sample column. These used to load with
+// no voice for the instrument and play silence.
+void testXtpUnifiedSampleInstrument()
+{
+    std::cout << "=== Testing Xtp sample instruments (exTracker unified instruments) ===" << std::endl;
+
+    juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                         .getChildFile("sp2_xtp_unified_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+    dir.getChildFile("song_samples").createDirectory();
+    writeTestToneWav(dir.getChildFile("song_samples/slot_003_tone.wav"), 48000.0, 1.0);
+
+    // 2 rows x 3 channels. Ch 0: note on instrument 20. Ch 1: muted channel.
+    // Ch 2: inside a muted track.
+    juce::String content =
+        "EXTRACKER_SONG_V1 2 3 1 1 0 0\n"
+        "PATTERN 0\n"
+        "0 0 1 60 20 65535 0 100 1 0 0\n"
+        "0 1 1 64 20 65535 0 100 1 0 0\n"
+        "0 2 1 67 20 65535 0 100 1 0 0\n"
+        "1 0 0 -1 0 65535 0 100 0 0 0\n"
+        "1 1 0 -1 0 65535 0 100 0 0 0\n"
+        "1 2 0 -1 0 65535 0 100 0 0 0\n"
+        "SONG_ORDER 0\n"
+        "PATTERN_SWING 50\n"
+        "INSERT_SWING_INHERIT 0\n"
+        "ROW_EDIT_SCOPE 0\n"
+        "TRANSPORT 125 6 6\n"
+        "MIDI_MAP -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1\n"
+        "MIDI_TRANSPORT 1500 0\n"
+        "INSTRUMENT_NAME 20 \"Tone SONG_ORDER 3\"\n"
+        "INSTRUMENT_ASSIGN 20 \"builtin.sample\"\n"
+        "INSTRUMENT_PARAM 20 gain 0.5\n"
+        "INSTRUMENT_PARAM 20 sample_root 60\n"
+        "INSTRUMENT_PARAM 20 loop_mode 1\n"
+        "INSTRUMENT_FILTER 20 1 0.5 0.2\n"
+        "INSTRUMENT_PITCH 20 12\n"
+        "SAMPLE_ENTRY 3 \"tone\" \"song_samples/slot_003_tone.wav\"\n"
+        "INSTR_SAMPLE_SLOT 20 3\n"
+        "MODULE_MESSAGE \"hi\"\n"
+        "CHANNEL_MUTED 0 1 0\n"
+        "CHANNEL_VOLUME 100 100 100\n"
+        "CHANNEL_NAMES \"Lead 1\" \"\" \"PATTERN 7\"\n"
+        "CHANNEL_FILTERS 0 255 0 0 255 0 0 255 0\n"
+        "CHANNEL_TRACKS 2 2 1 80 \"Muted chords\"\n"
+        "REVERB 128 64 0 255\n"
+        "RECORD_SETTINGS 1 0\n"
+        "RECORD_INSERT_JUMP 1\n";
+    juce::File songFile = dir.getChildFile("song.xtp");
+    songFile.replaceWithText(content);
+
+    // Release builds compile assert() out; these checks must always run.
+    auto require = [](bool ok, const char* what) {
+        if (!ok)
+            throw std::runtime_error(std::string("Unified-instrument check failed: ") + what);
+    };
+
+    xtp::Song song;
+    juce::String error;
+    if (!song.loadFromFile(songFile, error))
+        throw std::runtime_error("Unified-instrument song failed to parse: " + error.toStdString());
+    require(song.instruments[20] == "builtin.sample", "song.instruments[20] == \"builtin.sample\"");
+    require(song.instrumentSampleSlot.at(20) == 3, "song.instrumentSampleSlot.at(20) == 3");
+    require(std::abs(song.instrumentParams.at(20).at("gain") - 0.5) < 1e-9, "std::abs(song.instrumentParams.at(20).at(\"gain\") - 0.5) < 1e-9");
+    require(std::abs(song.instrumentPitch.at(20) - 12.0f) < 1e-6f, "std::abs(song.instrumentPitch.at(20) - 12.0f) < 1e-6f");
+    require(song.moduleMessage == "hi", "song.moduleMessage == \"hi\"");
+    require((song.channelSilenced() == std::vector<bool> { false, true, true }), "(song.channelSilenced() == std::vector<bool> { false, true, true })");
+    require(std::abs(song.channelGains()[2] - 0.8f) < 1e-6f, "std::abs(song.channelGains()[2] - 0.8f) < 1e-6f");
+    std::cout << "✓ Parses INSTR_SAMPLE_SLOT, INSTRUMENT_PARAM/PITCH, quoted names, tracks and mutes" << std::endl;
+
+    // Only channel 0 may sound, through instrument 20, transposed +12.
+    xtp::Sequencer sequencer;
+    sequencer.reset(song.channels);
+    sequencer.setChannelSilenced(song.channelSilenced());
+    xtp::TransportClock transport;
+    transport.setPatternRows(song.rows);
+    transport.reset(song.rows);
+    MockNoteSink sink;
+    sequencer.dispatchRow(0, song.patterns[0], transport, sink);
+    require(sink.onEvents.size() == 1, "sink.onEvents.size() == 1");
+    require(sink.onEvents[0].instrument == 20 && sink.onEvents[0].midiNote == 60, "sink.onEvents[0].instrument == 20 && sink.onEvents[0].midiNote == 60");
+    std::cout << "✓ Muted channel and muted track trigger no notes" << std::endl;
+
+    XtpSequencerSource source(songFile, XtpSequencerSource::kRenderSampleRate);
+    if (!source.isValid())
+        throw std::runtime_error("Source failed to load: " + source.getLoadError().toStdString());
+    source.prepareToPlay(512, XtpSequencerSource::kRenderSampleRate);
+    juce::AudioBuffer<float> buffer(2, 4800);
+    buffer.clear();
+    source.getNextAudioBlock(juce::AudioSourceChannelInfo(&buffer, 0, buffer.getNumSamples()));
+    const float rms = buffer.getRMSLevel(0, 0, buffer.getNumSamples());
+    if (rms < 0.01f)
+        throw std::runtime_error("Sample instrument rendered silence (rms " + std::to_string(rms) + ")");
+    std::cout << "✓ Sample instrument 20 renders audio (rms " << rms << ")" << std::endl;
+
+    dir.deleteRecursively();
+    std::cout << std::endl;
+}
+
 void testVideoExporter()
 {
     std::cout << "=== Testing VideoExporter ===" << std::endl;
@@ -1514,10 +1761,555 @@ void testFfmpegVideoFrameDecoder()
     std::cout << std::endl;
 }
 
+// Drag and drop runs every dropped path through AudioFileCollector. Video
+// files are playable, so a drop must accept them just like audio files.
+void testAudioFileCollectorAcceptsVideo()
+{
+    std::cout << "=== Testing AudioFileCollector drop filter ===" << std::endl;
+
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile("sp2_collector_test_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+    dir.createDirectory();
+
+    for (auto name : { "song.mp3", "clip.mp4", "movie.MKV", "tune.xm", "notes.txt" })
+        dir.getChildFile(name).create();
+
+    auto collected = AudioFileCollector::collect(juce::StringArray { dir.getFullPathName() });
+
+    juce::StringArray names;
+    for (const auto& f : collected)
+        names.add(f.getFileName());
+
+    assert(names.contains("song.mp3"));
+    assert(names.contains("clip.mp4"));
+    assert(names.contains("movie.MKV"));
+    assert(names.contains("tune.xm"));
+    assert(! names.contains("notes.txt"));
+    assert(AudioFileCollector::isSupported(dir.getChildFile("clip.mp4")));
+
+    dir.deleteRecursively();
+    std::cout << "✓ Drop filter accepts audio, module and video files\n" << std::endl;
+}
+
+// Unlike assert(), always evaluated (these checks call the code under test,
+// and the default build is Release) and reported through main()'s catch.
+#define MIC_CHECK(cond) \
+    do { if (! (cond)) throw std::runtime_error("check failed at line " + std::to_string(__LINE__) + ": " #cond); } while (0)
+
+// A mono ramp clip: sample i == i / 1000, so edits are easy to check by value.
+static void fillRampClip(MicClip& clip, int numSamples, double rate = 1000.0)
+{
+    juce::AudioBuffer<float> source(1, numSamples);
+    for (int i = 0; i < numSamples; ++i)
+        source.setSample(0, i, (float) i / 1000.0f);
+    clip.append(source, numSamples, rate);
+}
+
+void testMicClipEdits()
+{
+    std::cout << "=== Testing MicClip edits ===" << std::endl;
+
+    MicClip clip;
+    fillRampClip(clip, 1000);
+    MIC_CHECK(clip.getNumSamples() == 1000 && clip.getNumChannels() == 1);
+    MIC_CHECK(std::abs(clip.getLengthSeconds() - 1.0) < 1e-9);
+
+    // Appends at another rate are refused rather than silently mis-pitched.
+    juce::AudioBuffer<float> other(1, 10);
+    other.clear();
+    MIC_CHECK(! clip.append(other, 10, 48000.0));
+    std::cout << "✓ Append refuses a mismatched sample rate" << std::endl;
+
+    // Growing across many small appends keeps every sample in order.
+    MicClip grown;
+    for (int block = 0; block < 600; ++block)
+    {
+        juce::AudioBuffer<float> chunk(2, 512);
+        for (int i = 0; i < 512; ++i)
+        {
+            chunk.setSample(0, i, (float) (block * 512 + i));
+            chunk.setSample(1, i, -1.0f);
+        }
+        MIC_CHECK(grown.append(chunk, 512, 48000.0));
+    }
+    MIC_CHECK(grown.getNumSamples() == 600 * 512);
+    MIC_CHECK(grown.getBuffer().getSample(0, 300000) == 300000.0f);
+    std::cout << "✓ Append grows the clip across " << grown.getNumSamples() << " samples" << std::endl;
+
+    MIC_CHECK(clip.deleteRange({ 100, 200 }));
+    MIC_CHECK(clip.getNumSamples() == 900);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 100) - 0.2f) < 1e-6f);
+    std::cout << "✓ Delete removes the range and closes the gap" << std::endl;
+
+    MIC_CHECK(clip.undo());
+    MIC_CHECK(clip.getNumSamples() == 1000);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 150) - 0.15f) < 1e-6f);
+    MIC_CHECK(clip.redo());
+    MIC_CHECK(clip.getNumSamples() == 900);
+    MIC_CHECK(clip.undo());
+    std::cout << "✓ Undo/redo restore the clip" << std::endl;
+
+    MIC_CHECK(clip.keepOnly({ 500, 600 }));
+    MIC_CHECK(clip.getNumSamples() == 100);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 0) - 0.5f) < 1e-6f);
+    MIC_CHECK(clip.undo());
+    std::cout << "✓ Trim keeps only the selection" << std::endl;
+
+    MIC_CHECK(clip.silence({ 10, 20 }));
+    MIC_CHECK(clip.getBuffer().getSample(0, 15) == 0.0f);
+    MIC_CHECK(clip.getBuffer().getSample(0, 20) != 0.0f);
+    MIC_CHECK(clip.undo());
+
+    MIC_CHECK(clip.fadeOut({ 900, 1000 }));
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 999)) < 0.01f);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 899) - 0.899f) < 1e-6f);
+    MIC_CHECK(clip.undo());
+
+    MIC_CHECK(clip.fadeIn({ 0, 1000 }));
+    MIC_CHECK(clip.getBuffer().getSample(0, 0) == 0.0f);
+    MIC_CHECK(clip.undo());
+    std::cout << "✓ Silence and fades only touch the selection" << std::endl;
+
+    MIC_CHECK(clip.normalize({}, 0.5f));
+    MIC_CHECK(std::abs(clip.getBuffer().getMagnitude(0, 0, 1000) - 0.5f) < 1e-5f);
+    MIC_CHECK(clip.undo());
+    std::cout << "✓ Normalize brings the peak to the target" << std::endl;
+
+    // Out-of-range selections are clamped; empty ones do nothing.
+    MIC_CHECK(! clip.deleteRange({ 2000, 3000 }));
+    MIC_CHECK(clip.deleteRange({ 950, 5000 }));
+    MIC_CHECK(clip.getNumSamples() == 950);
+    std::cout << "✓ Ranges are clamped to the clip" << std::endl;
+
+    // Peaks: one bin per 256 samples, matching the data.
+    MIC_CHECK(clip.getPeaks(0).size() == (size_t) ((950 + MicClip::peakBinSize - 1) / MicClip::peakBinSize));
+    MIC_CHECK(std::abs(clip.getPeaks(0).back().max - 0.949f) < 1e-6f);
+    std::cout << "✓ Peak overview tracks edits" << std::endl;
+
+    // Round-trip through WAV and FLAC.
+    auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+    for (auto ext : { ".wav", ".flac" })
+    {
+        MicClip toSave;
+        fillRampClip(toSave, 4410, 44100.0);
+        auto file = tempDir.getChildFile(juce::String("mic_clip_test") + ext);
+        juce::String error;
+        MIC_CHECK(toSave.writeToFile(file, error));
+
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(file));
+        MIC_CHECK(reader != nullptr);
+        MIC_CHECK(reader->lengthInSamples == 4410 && reader->sampleRate == 44100.0 && reader->bitsPerSample == 24);
+        juce::AudioBuffer<float> back(1, 4410);
+        reader->read(&back, 0, 4410, 0, true, false);
+        MIC_CHECK(std::abs(back.getSample(0, 500) - 0.5f) < 1e-4f);
+        reader.reset();
+        file.deleteFile();
+        std::cout << "✓ Saves and reloads as " << ext << std::endl;
+    }
+
+    MicClip empty;
+    juce::String error;
+    MIC_CHECK(! empty.writeToFile(tempDir.getChildFile("mic_clip_empty.wav"), error) && error.isNotEmpty());
+    std::cout << "✓ Saving an empty clip reports an error" << std::endl;
+}
+
+void testClipPlaybackSource()
+{
+    std::cout << "=== Testing ClipPlaybackSource ===" << std::endl;
+
+    MicClip clip;
+    fillRampClip(clip, 1000, 1000.0);
+
+    ClipPlaybackSource playback(clip);
+    juce::AudioBuffer<float> out(2, 64);
+
+    // Same rate: plays the samples back verbatim, mono duplicated to both channels.
+    playback.prepareToPlay(64, 1000.0);
+    playback.start(100, 1000);
+    playback.getNextAudioBlock(juce::AudioSourceChannelInfo(out));
+    MIC_CHECK(std::abs(out.getSample(0, 0) - 0.1f) < 1e-6f);
+    MIC_CHECK(std::abs(out.getSample(1, 10) - 0.11f) < 1e-6f);
+    MIC_CHECK(std::abs(playback.getPositionSamples() - 164.0) < 1e-9);
+    std::cout << "✓ Plays from the start sample, mono to both channels" << std::endl;
+
+    // Stops at the end of the range and pads with silence.
+    playback.start(980, 1000);
+    playback.getNextAudioBlock(juce::AudioSourceChannelInfo(out));
+    MIC_CHECK(! playback.isPlaying());
+    MIC_CHECK(std::abs(out.getSample(0, 19) - 0.999f) < 1e-6f);
+    MIC_CHECK(out.getSample(0, 20) == 0.0f && out.getSample(0, 63) == 0.0f);
+    std::cout << "✓ Stops at the end of the range" << std::endl;
+
+    // Output at twice the clip rate: half-sample steps, interpolated.
+    playback.prepareToPlay(64, 2000.0);
+    playback.start(0, 1000);
+    playback.getNextAudioBlock(juce::AudioSourceChannelInfo(out));
+    MIC_CHECK(std::abs(out.getSample(0, 1) - 0.0005f) < 1e-6f);
+    MIC_CHECK(std::abs(out.getSample(0, 2) - 0.001f) < 1e-6f);
+    MIC_CHECK(std::abs(playback.getPositionSamples() - 32.0) < 1e-9);
+    std::cout << "✓ Resamples to the output rate" << std::endl;
+
+    playback.stop();
+    playback.getNextAudioBlock(juce::AudioSourceChannelInfo(out));
+    MIC_CHECK(out.getMagnitude(0, 64) == 0.0f);
+    std::cout << "✓ Silent when stopped" << std::endl;
+}
+
+void testMicRecorderCapture()
+{
+    std::cout << "=== Testing MicRecorder capture path ===" << std::endl;
+
+    // No device is opened: the callback is driven directly, like a mono mic would.
+    MicRecorder recorder;
+    recorder.prepareCapture(48000.0, 1);
+
+    std::vector<float> block(480);
+    const float* inputs[] = { block.data() };
+    juce::AudioIODeviceCallbackContext context;
+
+    auto feed = [&](float base)
+    {
+        for (size_t i = 0; i < block.size(); ++i)
+            block[i] = base + (float) i * 1.0e-6f;
+        recorder.audioDeviceIOCallbackWithContext(inputs, 1, nullptr, 0, (int) block.size(), context);
+    };
+
+    // Before Record: level is metered, nothing is captured.
+    feed(0.25f);
+    MIC_CHECK(recorder.takePeak(0) > 0.25f);
+    MIC_CHECK(recorder.takePeak(0) == 0.0f); // taking resets it
+
+    MicClip clip;
+    MIC_CHECK(recorder.drainInto(clip) == 0);
+    std::cout << "✓ Meters input without recording" << std::endl;
+
+    juce::String error;
+    MIC_CHECK(recorder.startRecording(error));
+    feed(0.5f);
+    feed(0.6f);
+    recorder.stopRecording();
+    feed(0.7f); // after stop: must not be captured
+    MIC_CHECK(recorder.drainInto(clip) == 960);
+    MIC_CHECK(clip.getNumSamples() == 960 && clip.getSampleRate() == 48000.0 && clip.getNumChannels() == 1);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 0) - 0.5f) < 1e-6f);
+    MIC_CHECK(std::abs(clip.getBuffer().getSample(0, 480) - 0.6f) < 1e-6f);
+    MIC_CHECK(recorder.getDroppedSamples() == 0);
+    std::cout << "✓ Captures exactly the blocks between start and stop" << std::endl;
+
+    // A FIFO that is never drained drops (and counts) the overflow instead of
+    // overwriting audio it already holds.
+    MIC_CHECK(recorder.startRecording(error));
+    for (int i = 0; i < 500; ++i) // ~5 s of audio into a 4 s FIFO
+        feed(0.1f);
+    recorder.stopRecording();
+    MIC_CHECK(recorder.getDroppedSamples() > 0);
+    MicClip overflowed;
+    MIC_CHECK(recorder.drainInto(overflowed) == 4 * 48000 - 1); // AbstractFifo keeps one slot free
+    std::cout << "✓ Overflow is counted as dropped samples" << std::endl;
+
+    // Once the device stops there is no input to record from.
+    recorder.audioDeviceStopped();
+    MIC_CHECK(! recorder.startRecording(error) && error.isNotEmpty());
+    std::cout << "✓ Refuses to record without an open input" << std::endl;
+}
+
+void testMicRecorderChannelModes()
+{
+    std::cout << "=== Testing MicRecorder channel modes ===" << std::endl;
+
+    // A stereo jack with a mono mic: signal on the right, faint noise on the left.
+    std::vector<float> left(480), right(480);
+    juce::Random random(7);
+    const float* inputs[] = { left.data(), right.data() };
+    juce::AudioIODeviceCallbackContext context;
+
+    auto feed = [&](MicRecorder& recorder)
+    {
+        for (size_t i = 0; i < 480; ++i)
+        {
+            left[i] = (random.nextFloat() - 0.5f) * 0.002f;          // ~ -60 dB
+            right[i] = 0.3f * std::sin((float) i * 0.05f);          // the voice
+        }
+        recorder.audioDeviceIOCallbackWithContext(inputs, 2, nullptr, 0, 480, context);
+    };
+
+    auto record = [&](MicRecorder::ChannelMode mode, MicClip& clip)
+    {
+        MicRecorder recorder;
+        recorder.prepareCapture(48000.0, 2);
+        recorder.setChannelMode(mode);
+        for (int i = 0; i < 100; ++i) // ~1 s of levels for the auto choice
+            feed(recorder);
+        juce::String error;
+        MIC_CHECK(recorder.startRecording(error));
+        const auto source = recorder.describeRecordSource();
+        for (int i = 0; i < 10; ++i)
+            feed(recorder);
+        recorder.stopRecording();
+        recorder.drainInto(clip);
+        return source;
+    };
+
+    MicClip autoClip;
+    MIC_CHECK(record(MicRecorder::ChannelMode::AutoMono, autoClip) == "right channel");
+    MIC_CHECK(autoClip.getNumChannels() == 1 && autoClip.getNumSamples() == 4800);
+    MIC_CHECK(std::abs(autoClip.getBuffer().getSample(0, 20) - right[20]) < 1e-6f);
+    std::cout << "✓ Auto mono records only the channel with signal" << std::endl;
+
+    MicClip leftClip;
+    record(MicRecorder::ChannelMode::Left, leftClip);
+    MIC_CHECK(leftClip.getNumChannels() == 1 && leftClip.getBuffer().getMagnitude(0, 0, 4800) < 0.01f);
+    std::cout << "✓ Left only records the left channel" << std::endl;
+
+    MicClip stereoClip;
+    MIC_CHECK(record(MicRecorder::ChannelMode::Stereo, stereoClip) == "stereo");
+    MIC_CHECK(stereoClip.getNumChannels() == 2 && stereoClip.getBuffer().getMagnitude(1, 0, 4800) > 0.29f);
+    std::cout << "✓ Stereo records both channels" << std::endl;
+
+    // Equal levels on both sides: auto mono mixes rather than guessing.
+    MIC_CHECK(ClipEffects::chooseMonoSource(0.01f, 0.012f) == -1);
+    MIC_CHECK(ClipEffects::chooseMonoSource(0.0001f, 0.01f) == 1);
+    MIC_CHECK(ClipEffects::chooseMonoSource(0.01f, 0.0001f) == 0);
+    std::cout << "✓ Mixes when both channels carry signal" << std::endl;
+
+    // Make Mono on an already-recorded stereo take.
+    MIC_CHECK(ClipEffects::chooseMonoSource(stereoClip.getBuffer(), stereoClip.getNumSamples()) == 1);
+    MIC_CHECK(stereoClip.makeMono(1));
+    MIC_CHECK(stereoClip.getNumChannels() == 1 && stereoClip.getBuffer().getMagnitude(0, 0, 4800) > 0.29f);
+    MIC_CHECK(stereoClip.undo() && stereoClip.getNumChannels() == 2);
+    MIC_CHECK(! autoClip.makeMono(0)); // already mono
+    std::cout << "✓ Make Mono keeps the chosen channel, and undoes" << std::endl;
+}
+
+// Level of one frequency in a mono buffer range, as an amplitude.
+static float toneAmplitude(const juce::AudioBuffer<float>& audio, int start, int length, double rate, double hz)
+{
+    double re = 0.0, im = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+        const double phase = juce::MathConstants<double>::twoPi * hz * i / rate;
+        re += audio.getSample(0, start + i) * std::cos(phase);
+        im += audio.getSample(0, start + i) * std::sin(phase);
+    }
+    return (float) (2.0 * std::hypot(re, im) / length);
+}
+
+void testClipEffects()
+{
+    std::cout << "=== Testing ClipEffects (hum + noise reduction) ===" << std::endl;
+    constexpr double rate = 48000.0;
+    constexpr int length = 96000;
+
+    // Hum: 50 Hz + 100 Hz buzz under a 1 kHz "voice" tone.
+    juce::AudioBuffer<float> hum(1, length);
+    for (int i = 0; i < length; ++i)
+    {
+        const double t = i / rate;
+        hum.setSample(0, i, (float) (0.1 * std::sin(juce::MathConstants<double>::twoPi * 50.0 * t)
+                                   + 0.05 * std::sin(juce::MathConstants<double>::twoPi * 100.0 * t)
+                                   + 0.2 * std::sin(juce::MathConstants<double>::twoPi * 1000.0 * t)));
+    }
+    MIC_CHECK(ClipEffects::detectMainsHz(hum, length, rate) == 50.0);
+    ClipEffects::removeHum(hum, 0, length, rate, 50.0);
+    // Measured on the second half, after the filters have settled.
+    const float hum50 = toneAmplitude(hum, length / 2, length / 2, rate, 50.0);
+    const float hum100 = toneAmplitude(hum, length / 2, length / 2, rate, 100.0);
+    const float voice = toneAmplitude(hum, length / 2, length / 2, rate, 1000.0);
+    MIC_CHECK(hum50 < 0.1f * 0.01f);   // > 40 dB down
+    MIC_CHECK(hum100 < 0.05f * 0.03f); // > 30 dB down
+    MIC_CHECK(std::abs(voice - 0.2f) < 0.2f * 0.06f); // within 0.5 dB
+    std::cout << "✓ Remove Hum: 50 Hz " << juce::Decibels::toString(juce::Decibels::gainToDecibels(hum50 / 0.1f))
+              << ", 100 Hz " << juce::Decibels::toString(juce::Decibels::gainToDecibels(hum100 / 0.05f))
+              << ", 1 kHz tone kept" << std::endl;
+
+    // Noise: steady hiss throughout, with a tone only in the second half.
+    juce::Random random(42);
+    juce::AudioBuffer<float> noisy(1, length);
+    for (int i = 0; i < length; ++i)
+    {
+        float x = (random.nextFloat() * 2.0f - 1.0f) * 0.01f; // ~ -45 dB RMS hiss
+        if (i >= length / 2)
+            x += 0.3f * (float) std::sin(juce::MathConstants<double>::twoPi * 440.0 * i / rate);
+        noisy.setSample(0, i, x);
+    }
+
+    // 0 dB reduction must give the input back (the STFT reconstructs exactly).
+    juce::AudioBuffer<float> copy(noisy);
+    auto profile = ClipEffects::learnNoiseProfile(copy, 0, length / 2);
+    MIC_CHECK(profile.isValid() && profile.frames > 10);
+    ClipEffects::reduceNoise(copy, 0, length, profile, 0.0f);
+    float maxError = 0.0f;
+    for (int i = 0; i < length; ++i)
+        maxError = juce::jmax(maxError, std::abs(copy.getSample(0, i) - noisy.getSample(0, i)));
+    MIC_CHECK(maxError < 1.0e-4f);
+    std::cout << "✓ Reduce Noise at 0 dB reconstructs the input" << std::endl;
+
+    const float noiseBefore = noisy.getRMSLevel(0, 0, length / 2);
+    const float toneBefore = toneAmplitude(noisy, length / 2, length / 2, rate, 440.0);
+    ClipEffects::reduceNoise(noisy, 0, length, profile, 12.0f);
+    const float noiseAfter = noisy.getRMSLevel(0, 0, length / 2);
+    const float toneAfter = toneAmplitude(noisy, length / 2, length / 2, rate, 440.0);
+    const float noiseDropDb = juce::Decibels::gainToDecibels(noiseAfter / noiseBefore);
+    MIC_CHECK(noiseDropDb < -9.0f);
+    MIC_CHECK(std::abs(toneAfter - toneBefore) < toneBefore * 0.06f);
+    std::cout << "✓ Reduce Noise (-12 dB): hiss " << juce::String(noiseDropDb, 1)
+              << " dB, tone kept within 0.5 dB" << std::endl;
+
+    // Without a hand-picked profile, the quiet half is found automatically.
+    auto estimated = ClipEffects::estimateNoiseProfile(copy, 0, length);
+    MIC_CHECK(estimated.isValid());
+    MIC_CHECK(std::abs(estimated.magnitudes[0][200] - profile.magnitudes[0][200])
+              < profile.magnitudes[0][200] * 0.5f);
+    MIC_CHECK(! ClipEffects::learnNoiseProfile(copy, 0, 1000).isValid()); // shorter than a frame
+
+    // The quietest half second of "hiss, then hiss + tone" lies in the first half.
+    const auto quiet = ClipEffects::findQuietestStretch(copy, length, 24000);
+    MIC_CHECK(quiet >= 0 && quiet + 24000 <= length / 2);
+    MIC_CHECK(ClipEffects::findQuietestStretch(copy, 1000, 24000) == -1); // too short
+    std::cout << "✓ Noise profile can be estimated from the quietest frames" << std::endl;
+
+    // As a clip edit it is one undo step.
+    MicClip clip;
+    clip.append(copy, length, rate);
+    MIC_CHECK(clip.applyEffect({}, [&](juce::AudioBuffer<float>& audio, int start, int len)
+    {
+        ClipEffects::reduceNoise(audio, start, len, estimated, 12.0f);
+        return true;
+    }));
+    MIC_CHECK(clip.getBuffer().getRMSLevel(0, 0, length / 2) < copy.getRMSLevel(0, 0, length / 2) * 0.5f);
+    MIC_CHECK(clip.undo());
+    MIC_CHECK(clip.getBuffer().getSample(0, 1234) == copy.getSample(0, 1234));
+    std::cout << "✓ Effects apply as a single undoable edit" << std::endl;
+}
+
+// A voice-like test signal: 150 Hz with 40 harmonics falling 6 dB/octave,
+// in 3 Hz "syllables" so there are pauses, under steady hiss. Reports how much
+// of the voice above 2 kHz survives noise reduction (projection onto the clean
+// signal, so the hiss itself doesn't count), and how far the hiss drops.
+struct VoiceNoiseResult { float highBandKeptDb; float midBandKeptDb; float hissDropDb; };
+
+static VoiceNoiseResult measureVoiceUnderNoise(float reductionDb)
+{
+    constexpr double rate = 48000.0;
+    constexpr int length = 144000; // 3 s
+    juce::AudioBuffer<float> clean(1, length), noisy(1, length);
+    juce::Random random(3);
+
+    for (int i = 0; i < length; ++i)
+    {
+        const double t = i / rate;
+        const double syllable = std::sin(juce::MathConstants<double>::pi * 3.0 * t);
+        const double envelope = syllable > 0.0 ? syllable : 0.0; // voiced half, silent half
+        double voice = 0.0;
+        for (int k = 1; k <= 40; ++k)
+            voice += (0.25 / k) * std::sin(juce::MathConstants<double>::twoPi * 150.0 * k * t + k * 0.7);
+        clean.setSample(0, i, (float) (voice * envelope));
+        noisy.setSample(0, i, clean.getSample(0, i) + (random.nextFloat() * 2.0f - 1.0f) * 0.03f);
+    }
+
+    juce::AudioBuffer<float> hissOnly(1, length);
+    for (int i = 0; i < length; ++i)
+        hissOnly.setSample(0, i, noisy.getSample(0, i) - clean.getSample(0, i));
+
+    // Noise profile from the first pause (t = 1/3 s .. 2/3 s is silent).
+    const auto profile = ClipEffects::learnNoiseProfile(noisy, 17000, 14000);
+    juce::AudioBuffer<float> out(noisy);
+    ClipEffects::reduceNoise(out, 0, length, profile, reductionDb);
+
+    auto bandKept = [&](float lowHz, float highHz)
+    {
+        using Coefficients = juce::dsp::IIR::Coefficients<float>;
+        auto filtered = [&](const juce::AudioBuffer<float>& src)
+        {
+            juce::AudioBuffer<float> b(src);
+            juce::dsp::IIR::Filter<float> hp1(Coefficients::makeHighPass(rate, lowHz)), hp2(Coefficients::makeHighPass(rate, lowHz));
+            juce::dsp::IIR::Filter<float> lp1(Coefficients::makeLowPass(rate, highHz)), lp2(Coefficients::makeLowPass(rate, highHz));
+            for (int i = 0; i < length; ++i)
+                b.setSample(0, i, lp2.processSample(lp1.processSample(hp2.processSample(hp1.processSample(b.getSample(0, i))))));
+            return b;
+        };
+        const auto c = filtered(clean), o = filtered(out);
+        double dot = 0.0, energy = 0.0;
+        for (int i = 4800; i < length; ++i)
+        {
+            dot += (double) o.getSample(0, i) * c.getSample(0, i);
+            energy += (double) c.getSample(0, i) * c.getSample(0, i);
+        }
+        return juce::Decibels::gainToDecibels((float) (dot / energy));
+    };
+
+    // Hiss drop measured in the pauses.
+    double before = 0.0, after = 0.0;
+    for (int i = 0; i < length; ++i)
+        if (clean.getSample(0, i) == 0.0f)
+        {
+            before += (double) noisy.getSample(0, i) * noisy.getSample(0, i);
+            after  += (double) out.getSample(0, i) * out.getSample(0, i);
+        }
+
+    return { bandKept(2000.0f, 6000.0f), bandKept(300.0f, 2000.0f),
+             juce::Decibels::gainToDecibels((float) std::sqrt(after / before)) };
+}
+
+void testNoiseReductionKeepsVoice()
+{
+    std::cout << "=== Testing noise reduction on a voice-like signal ===" << std::endl;
+    for (float reduction : { 6.0f, 12.0f, 20.0f })
+    {
+        const auto r = measureVoiceUnderNoise(reduction);
+        std::cout << "  -" << reduction << " dB: voice 300-2k " << juce::String(r.midBandKeptDb, 1)
+                  << " dB, 2k-6k " << juce::String(r.highBandKeptDb, 1)
+                  << " dB, hiss in pauses " << juce::String(r.hissDropDb, 1) << " dB" << std::endl;
+        // The voice -- including its upper harmonics -- must come through
+        // nearly intact; muffling it is the "bad internet call" sound.
+        MIC_CHECK(r.midBandKeptDb > -1.0f);
+        MIC_CHECK(r.highBandKeptDb > -2.0f);
+        MIC_CHECK(r.hissDropDb < -reduction * 0.7f);
+    }
+    std::cout << "✓ Voice harmonics survive while hiss in the pauses drops" << std::endl;
+}
+
+// Hardware probe, skipped unless EXPLAYER_MIC_PROBE=1: opens the real
+// default input exactly as the recorder window does, records two seconds and
+// reports the level -- a quick way to tell "the app can't open the mic" from
+// "the mic is muted/too quiet" on a given machine.
+void testMicRecorderLiveDevice()
+{
+    if (juce::SystemStats::getEnvironmentVariable("EXPLAYER_MIC_PROBE", {}) != "1")
+        return;
+
+    std::cout << "=== Probing the real microphone input ===" << std::endl;
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    MicRecorder recorder;
+    const auto error = recorder.openInputDevice();
+    std::cout << "  device: " << recorder.describeCurrentInput() << std::endl;
+    MIC_CHECK(error.isEmpty());
+
+    juce::String startError;
+    MIC_CHECK(recorder.startRecording(startError));
+    MicClip clip;
+    float peak = 0.0f;
+    for (int i = 0; i < 40; ++i)
+    {
+        juce::Thread::sleep(50);
+        recorder.drainInto(clip);
+        peak = juce::jmax(peak, recorder.takePeak(0));
+    }
+    recorder.stopRecording();
+    recorder.drainInto(clip);
+
+    std::cout << "  captured " << clip.getLengthSeconds() << " s, peak "
+              << juce::Decibels::toString(juce::Decibels::gainToDecibels(peak)) << std::endl;
+    MIC_CHECK(clip.getLengthSeconds() > 1.5);
+}
+
 int main()
 {
     std::cout << "\n════════════════════════════════════════" << std::endl;
-    std::cout << "  SoundPlayer2 Feature Test Suite" << std::endl;
+    std::cout << "  exPlayer Feature Test Suite" << std::endl;
     std::cout << "════════════════════════════════════════\n" << std::endl;
     
     try
@@ -1534,7 +2326,12 @@ int main()
         testXtpSongParsing();
         testXtpSequencerMissingSampleFile();
         testXtpSequencerRowJump();
+        testXtpPlayPositionForPatternViewer();
+#ifdef EXPLAYER_OPENMPT_SUPPORT
+        testOpenMptPlayPositionForPatternViewer();
+#endif
         testXtpSequencerChannelVolume();
+        testXtpUnifiedSampleInstrument();
         testVideoExporter();
         testPlaylistVideoExporter();
         testScreenRecorder();
@@ -1543,6 +2340,14 @@ int main()
         testFfmpegVideoAudioFormatReaderSequentialRead();
         testFfmpegVideoAudioFormatReaderSeek();
         testFfmpegVideoFrameDecoder();
+        testAudioFileCollectorAcceptsVideo();
+        testMicClipEdits();
+        testClipPlaybackSource();
+        testMicRecorderCapture();
+        testMicRecorderChannelModes();
+        testClipEffects();
+        testNoiseReductionKeepsVoice();
+        testMicRecorderLiveDevice();
 
         std::cout << "════════════════════════════════════════" << std::endl;
         std::cout << "  ✅ All tests passed!" << std::endl;

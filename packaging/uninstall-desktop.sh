@@ -10,10 +10,10 @@ APP_DIR="$DATA_HOME/applications"
 ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 MIME_DIR="$DATA_HOME/mime/packages"
 
-rm -f "$BIN_DIR/soundplayer2"
-rm -f "$ICON_DIR/soundplayer2.svg"
-rm -f "$MIME_DIR/soundplayer2.xml"
-rm -f "$APP_DIR/soundplayer2.desktop"
+rm -f "$BIN_DIR/explayer"
+rm -f "$ICON_DIR/explayer.svg"
+rm -f "$MIME_DIR/explayer.xml"
+rm -f "$APP_DIR/explayer.desktop"
 
 if command -v update-mime-database >/dev/null 2>&1; then
     update-mime-database "$DATA_HOME/mime" >/dev/null 2>&1 || true
@@ -25,4 +25,4 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
-echo "Removed SoundPlayer2 desktop integration."
+echo "Removed exPlayer desktop integration."

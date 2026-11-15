@@ -1,6 +1,6 @@
 #include "ModulePatternData.h"
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
  #include <libopenmpt/libopenmpt.hpp>
 #endif
 
@@ -12,13 +12,20 @@ void ModulePatternData::clear()
     numChannels = 0;
     title       = {};
     patterns.clear();
+    order.clear();
+    orderStartTimes.clear();
+    instrumentNames.clear();
+    instrumentNamesAreSamples = false;
+    instrumentsInDecimal = false;
+    message = {};
+    artist  = {};
 }
 
 bool ModulePatternData::loadFromFile(const juce::File& file)
 {
     clear();
 
-#ifdef SOUNDPLAYER_OPENMPT_SUPPORT
+#ifdef EXPLAYER_OPENMPT_SUPPORT
     juce::MemoryBlock raw;
     if (!file.loadFileAsData(raw))
         return false;
@@ -84,6 +91,42 @@ bool ModulePatternData::loadFromFile(const juce::File& file)
         }
     }
 
+    const int numOrders = mod->get_num_orders();
+    order.reserve((size_t)numOrders);
+    for (int o = 0; o < numOrders; ++o)
+    {
+        // Ask libopenmpt which entries are "+++" (skip) and "---" (stop): the
+        // raw pattern values for them differ by format (0xFE/0xFF in
+        // MOD/S3M/IT, 0xFFFE/0xFFFF in MPTM).
+        const int p = mod->get_order_pattern(o);
+        if (mod->is_order_skip_entry(o))      order.push_back(kOrderSkip);
+        else if (mod->is_order_stop_entry(o)) order.push_back(kOrderEnd);
+        else order.push_back(p >= 0 && p < numPats ? p : kOrderSkip);
+    }
+
+    orderStartTimes.reserve(order.size());
+    for (int o = 0; o < numOrders; ++o)
+    {
+        double t = -1.0;
+        if (order[(size_t) o] >= 0)
+        {
+            try { t = mod->get_time_at_position(o, 0); }
+            catch (const openmpt::exception&) { t = -1.0; }
+        }
+        orderStartTimes.push_back(t);
+    }
+
+    message = juce::String(juce::CharPointer_UTF8(mod->get_metadata("message").c_str())).trimEnd();
+    artist  = juce::String(juce::CharPointer_UTF8(mod->get_metadata("artist").c_str())).trim();
+
+    // Instrument numbers in pattern cells are 1-based. Formats without
+    // instruments (MOD, S3M) number samples there instead.
+    const auto instruments = mod->get_instrument_names();
+    const auto& names = instruments.empty() ? mod->get_sample_names() : instruments;
+    instrumentNamesAreSamples = instruments.empty();
+    for (size_t i = 0; i < names.size(); ++i)
+        instrumentNames.push_back({ (int) i + 1, juce::String(juce::CharPointer_UTF8(names[i].c_str())) });
+
     loaded = !patterns.empty();
     return loaded;
 
@@ -100,7 +143,25 @@ bool ModulePatternData::loadFromXtpSong(const xtp::Song& song)
         return false;
 
     title = song.moduleMessage;
+    message = song.moduleMessage;
     numChannels = song.channels;
+    instrumentsInDecimal = true; // see formatInst below
+
+    // Trailing unnamed slots are just the unused rest of the bank.
+    int lastNamed = -1;
+    for (int i = 0; i < (int) song.instruments.size(); ++i)
+        if (song.instruments[(size_t) i].isNotEmpty()) lastNamed = i;
+    for (int i = 0; i <= lastNamed; ++i)
+    {
+        // Slots hold plugin ids ("builtin.sine"); a sampler slot is better
+        // named by the sample it plays.
+        juce::String name = song.instruments[(size_t) i];
+        if (auto slot = song.instrumentSampleSlot.find(i); slot != song.instrumentSampleSlot.end())
+            if (auto sample = song.samples.find(slot->second); sample != song.samples.end()
+                                                              && sample->second.name.isNotEmpty())
+                name = sample->second.name;
+        instrumentNames.push_back({ i, name });
+    }
 
     static const char* const noteNames[12] = {
         "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"
@@ -161,6 +222,10 @@ bool ModulePatternData::loadFromXtpSong(const xtp::Song& song)
             }
         }
     }
+
+    order.reserve(song.songOrder.size());
+    for (int p : song.songOrder)
+        order.push_back(p >= 0 && p < (int) patterns.size() ? p : kOrderSkip);
 
     loaded = !patterns.empty();
     return loaded;

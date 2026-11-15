@@ -1,6 +1,6 @@
 #include "XtpSequencerSource.h"
 
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
 #include "XtpSf2Voice.h"
 #endif
 
@@ -59,9 +59,12 @@ XtpSequencerSource::~XtpSequencerSource() = default;
 
 void XtpSequencerSource::buildInstrumentVoices()
 {
-    for (int slot = 0; slot < 16; ++slot)
+    for (int slot = 0; slot < xtp::Song::kInstrumentSlots; ++slot)
     {
         const juce::String& id = song.instruments[(size_t) slot];
+        if (auto pitch = song.instrumentPitch.find(slot); pitch != song.instrumentPitch.end())
+            instrumentNoteOffset[(size_t) slot] = (int) std::round(pitch->second);
+
         if (id == "builtin.sine")
         {
             instrumentVoices[(size_t) slot] =
@@ -74,19 +77,44 @@ void XtpSequencerSource::buildInstrumentVoices()
         }
         else if (id == "builtin.sample")
         {
-            // No WAV path is attached to the instrument slot itself -- actual
-            // sample audio only comes from the per-step `sample` bank-slot field,
-            // which resolveVoice() already prefers over the instrument slot. An
-            // instrument merely assigned "builtin.sample" with no per-note sample
-            // reference has nothing to play.
+            // A sample instrument plays the bank slot it's linked to
+            // (INSTR_SAMPLE_SLOT), with its own gain/root/loop settings, so it
+            // gets its own voice rather than sharing the bank slot's. Unlinked,
+            // it stays empty and resolveVoice() falls back to bank slot N for
+            // older songs.
+            const auto link = song.instrumentSampleSlot.find(slot);
+            const auto entry = link != song.instrumentSampleSlot.end() ? song.samples.find(link->second)
+                                                                       : song.samples.end();
+            if (entry != song.samples.end())
+            {
+                auto voice = std::make_unique<xtp::SampleVoice>();
+                if (voice->loadSample(entry->second.path))
+                {
+                    if (auto params = song.instrumentParams.find(slot); params != song.instrumentParams.end())
+                        for (const auto& [name, value] : params->second)
+                            voice->setParameter(name, value);
+                    instrumentVoices[(size_t) slot] = std::move(voice);
+                }
+                else
+                {
+                    fprintf(stderr, "XtpSequencerSource: instrument slot %d failed to load sample '%s' -- will be silent\n",
+                            slot, entry->second.path.getFullPathName().toRawUTF8());
+                    instrumentVoices[(size_t) slot] = std::make_unique<xtp::SilentVoice>();
+                }
+            }
         }
-#if defined(SOUNDPLAYER_FLUIDSYNTH_SUPPORT)
+#if defined(EXPLAYER_FLUIDSYNTH_SUPPORT)
         else if (id.startsWith("sf2:"))
         {
             // Treated as a direct filesystem path, not exTracker's own
             // pre-scanned-directory gating (an implementation quirk of
             // PluginHost, not a format requirement -- see XtpSequencer.h).
-            const juce::File sf2File(id.substring(4));
+            // ":melodic:NN" (one drum key played chromatically) isn't
+            // reproduced: the soundfont plays its default preset instead.
+            juce::String sf2Path = id.substring(4);
+            if (const int melodic = sf2Path.lastIndexOf(":melodic:"); melodic >= 0)
+                sf2Path = sf2Path.substring(0, melodic);
+            const juce::File sf2File(sf2Path);
             auto voice = std::make_unique<xtp::Sf2Voice>();
             if (voice->loadSoundFont(sf2File, sampleRate))
             {
@@ -126,6 +154,9 @@ void XtpSequencerSource::buildInstrumentVoices()
 
 xtp::InstrumentVoice* XtpSequencerSource::resolveVoice(std::uint8_t instrument, std::uint16_t sample)
 {
+    // Older songs: a sample column naming a loaded bank slot plays that slot.
+    // exTracker converts such notes to a sample instrument on load; files it
+    // has saved since then never carry a sample column.
     if (sample != 0xFFFF)
     {
         auto it = sampleVoices.find((int) sample);
@@ -133,17 +164,22 @@ xtp::InstrumentVoice* XtpSequencerSource::resolveVoice(std::uint8_t instrument, 
             return it->second.get();
     }
 
-    if (instrument >= 16)
-    {
-        auto it = sampleVoices.find((int) instrument);
-        return (it != sampleVoices.end()) ? it->second.get() : nullptr;
-    }
-
     if (instrumentVoices[instrument])
         return instrumentVoices[instrument].get();
 
+    // Older songs: an empty instrument slot N (or an unlinked builtin.sample)
+    // borrowed bank slot N -- also converted by exTracker's load migration.
     auto it = sampleVoices.find((int) instrument);
     return (it != sampleVoices.end()) ? it->second.get() : nullptr;
+}
+
+int XtpSequencerSource::offsetNote(std::uint8_t instrument, std::uint16_t sample, int midiNote) const
+{
+    // INSTRUMENT_PITCH only applies when the note plays its instrument.
+    const bool viaInstrument = instrumentVoices[instrument] != nullptr
+        && (sample == 0xFFFF || sampleVoices.find((int) sample) == sampleVoices.end());
+    const int offset = viaInstrument ? instrumentNoteOffset[instrument] : 0;
+    return offset != 0 ? juce::jlimit(0, 127, midiNote + offset) : midiNote;
 }
 
 void XtpSequencerSource::noteOn(std::uint8_t instrument, std::uint16_t sample, int midiNote,
@@ -152,7 +188,7 @@ void XtpSequencerSource::noteOn(std::uint8_t instrument, std::uint16_t sample, i
     if (suppressAudibleDispatch)
         return;
     if (auto* voice = resolveVoice(instrument, sample))
-        voice->noteOn(midiNote, velocity, retrigger);
+        voice->noteOn(offsetNote(instrument, sample, midiNote), velocity, retrigger);
 }
 
 void XtpSequencerSource::noteOff(std::uint8_t instrument, std::uint16_t sample, int midiNote)
@@ -160,7 +196,7 @@ void XtpSequencerSource::noteOff(std::uint8_t instrument, std::uint16_t sample, 
     if (suppressAudibleDispatch)
         return;
     if (auto* voice = resolveVoice(instrument, sample))
-        voice->noteOff(midiNote);
+        voice->noteOff(offsetNote(instrument, sample, midiNote));
 }
 
 void XtpSequencerSource::seekToSampleZero()
@@ -186,7 +222,8 @@ void XtpSequencerSource::seekToSampleZero()
     transport.reset(song.patterns[(size_t) currentPatternIndex].rows);
 
     sequencer.reset(song.channels);
-    sequencer.setChannelVolumes(song.channelVolume);
+    sequencer.setChannelVolumes(song.channelGains());
+    sequencer.setChannelSilenced(song.channelSilenced());
 
     tickTimeAccumulator = 0.0;
     position = 0;
@@ -194,6 +231,8 @@ void XtpSequencerSource::seekToSampleZero()
 
     currentRowForUi.store(0);
     currentPatternForUi.store(currentPatternIndex);
+    currentOrderForUi.store(song.songOrder.empty() ? -1 : 0);
+    publishRowFraction();
 
     // Row 0 fires immediately at t=0, before any tick has elapsed -- matches
     // exTracker's own behavior (the sequencer dispatches whatever row the
@@ -249,6 +288,16 @@ void XtpSequencerSource::advanceOneTick()
 
     currentRowForUi.store(transport.row());
     currentPatternForUi.store(currentPatternIndex);
+    currentOrderForUi.store(song.songOrder.empty() ? -1 : songOrderPosition);
+}
+
+void XtpSequencerSource::publishRowFraction()
+{
+    const double tickSeconds = transport.secondsUntilNextTick();
+    const int ticksPerRow = juce::jmax(1, transport.ticksPerRow_());
+    const double intoTick = tickSeconds > 0.0 ? juce::jlimit(0.0, 0.999, tickTimeAccumulator / tickSeconds) : 0.0;
+    rowFractionForUi.store(juce::jlimit(0.0, 0.999, ((double) transport.ticksIntoRow() + intoTick) / ticksPerRow));
+    rowSecondsForUi.store(tickSeconds * ticksPerRow);
 }
 
 void XtpSequencerSource::prepareToPlay(int, double) {}
@@ -302,6 +351,7 @@ void XtpSequencerSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& i
             advanceOneTick();
         }
     }
+    publishRowFraction();
 
     for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
     {
@@ -354,4 +404,5 @@ void XtpSequencerSource::setNextReadPosition(juce::int64 newPosition)
         }
     }
     suppressAudibleDispatch = false;
+    publishRowFraction();
 }

@@ -59,6 +59,10 @@ public:
     // Entries beyond `volumes.size()` keep the default of 1.0.
     void setChannelVolumes(const std::vector<float>& volumes);
 
+    // Channels flagged true trigger no notes (exTracker skips muted channels
+    // rather than playing them at minimum velocity).
+    void setChannelSilenced(const std::vector<bool>& silenced);
+
     // Call once whenever the transport crosses into a new row (including a
     // forced re-entry after a same-tick jump). `pattern` is the pattern
     // currently playing. Returns true if this row's effects caused a same-tick
@@ -138,10 +142,15 @@ private:
     std::vector<ChannelControlState> channelControl;
     std::vector<ChannelNote> channelNote;
     std::vector<float> channelVolume;
+    std::vector<bool> channelSilenced;
 
     std::uint32_t rowDelayTargetRow = kInvalidLoopRow;
     std::uint8_t rowDelayRowsRemaining = 0;
 
+    bool isSilenced(int channel) const
+    {
+        return channel >= 0 && (size_t) channel < channelSilenced.size() && channelSilenced[(size_t) channel];
+    }
     void dispatchNoteOn(int channel, ChannelNote& note, NoteSink& sink, bool retrigger);
     std::uint8_t effectiveVelocity(int channel, const ChannelNote& note, std::uint8_t velocity) const;
 };

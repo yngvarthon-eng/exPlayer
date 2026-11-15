@@ -1,15 +1,16 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
+#include "Util/AppLogger.h"
 
 #ifndef JUCE_APPLICATION_NAME_STRING
-#define JUCE_APPLICATION_NAME_STRING "SoundPlayer2"
+#define JUCE_APPLICATION_NAME_STRING "exPlayer"
 #endif
 
 #ifndef JUCE_APPLICATION_VERSION_STRING
 #define JUCE_APPLICATION_VERSION_STRING "0.1.0"
 #endif
 
-class SoundPlayer2Application : public juce::JUCEApplication
+class ExPlayerApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
@@ -42,6 +43,10 @@ public:
         }
        #endif
 
+        logger = std::make_unique<AppLogger>();
+        juce::Logger::setCurrentLogger (logger.get());
+        juce::Logger::writeToLog (getApplicationName() + " " + getApplicationVersion() + " starting");
+
         mainWindow.reset (new MainWindow (getApplicationName()));
 
        #if JUCE_LINUX
@@ -57,6 +62,9 @@ public:
         instanceServer.reset();
        #endif
         mainWindow = nullptr;
+
+        juce::Logger::setCurrentLogger (nullptr);
+        logger.reset();
     }
 
     void systemRequestedQuit() override
@@ -158,7 +166,7 @@ private:
     // object owns its own lifetime and deletes itself once the peer disconnects.
     struct IncomingConnection final : public juce::InterprocessConnection
     {
-        explicit IncomingConnection (SoundPlayer2Application& ownerApp) : app (ownerApp) {}
+        explicit IncomingConnection (ExPlayerApplication& ownerApp) : app (ownerApp) {}
 
         void connectionMade() override {}
 
@@ -173,19 +181,19 @@ private:
             app.handleIncomingCommandLine (message.toString());
         }
 
-        SoundPlayer2Application& app;
+        ExPlayerApplication& app;
     };
 
     struct SingleInstanceServer final : public juce::InterprocessConnectionServer
     {
-        explicit SingleInstanceServer (SoundPlayer2Application& ownerApp) : app (ownerApp) {}
+        explicit SingleInstanceServer (ExPlayerApplication& ownerApp) : app (ownerApp) {}
 
         juce::InterprocessConnection* createConnectionObject() override
         {
             return new IncomingConnection (app);
         }
 
-        SoundPlayer2Application& app;
+        ExPlayerApplication& app;
     };
 
     void startSingleInstanceServer()
@@ -226,7 +234,8 @@ private:
     std::unique_ptr<SingleInstanceServer> instanceServer;
    #endif // JUCE_LINUX
 
+    std::unique_ptr<AppLogger> logger;
     std::unique_ptr<MainWindow> mainWindow;
 };
 
-START_JUCE_APPLICATION (SoundPlayer2Application)
+START_JUCE_APPLICATION (ExPlayerApplication)

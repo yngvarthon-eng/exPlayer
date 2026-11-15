@@ -19,6 +19,7 @@
 #include "UI/AudioAnalysisComponent.h"
 #include "Export/VideoExportController.h"
 #include "Export/PlaylistVideoExportController.h"
+#include "UI/MicRecorderComponent.h"
 
 // The application window: owns the engine, the playlist and every panel, and
 // wires them together.
@@ -63,12 +64,15 @@ public:
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
     // Public so it can be invoked via PlayerControlsComponent's record menu
-    // ("Record video with Soundplayer2's export function"), not just a toolbar
+    // ("Record video with exPlayer's export function"), not just a toolbar
     // button of its own.
     void showExportVideoDialog();
 
     // Public for the same reason ("Record playlist as video" in the record menu).
     void showExportPlaylistVideoDialog();
+
+    // Opens (or brings forward) the "Record from microphone" window.
+    void showMicRecorder();
 
 private:
     // --- Construction, in the order the constructor calls these -------------
@@ -145,6 +149,11 @@ private:
     std::unique_ptr<FullScreenWindowController>    fullscreenWindows;
     std::unique_ptr<VideoExportController>         videoExport;
     std::unique_ptr<PlaylistVideoExportController> playlistVideoExport;
+
+    // Created on demand and destroyed when closed, so the mic is only held
+    // open while the window is up. Declared after audioEngine, whose
+    // auxiliary source it borrows, so it is torn down first.
+    std::unique_ptr<MicRecorderWindow> micRecorderWindow;
 
     // True while the loaded track is a video. Kept as a flag rather than read
     // back from videoPreview->isVisible() so the layout and the video handoff

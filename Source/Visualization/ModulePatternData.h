@@ -36,6 +36,22 @@ struct ModulePattern
     }
 };
 
+/**
+ * Where playback is in a module, as the pattern viewer needs it to scroll
+ * smoothly: whole row plus how far into it, and the song-order position so the
+ * viewer can show the neighbouring patterns.
+ */
+struct PatternPlayPosition
+{
+    int    pattern       = -1;
+    int    row           = -1;
+    double rowFraction   = 0.0;  // 0..1 through `row`
+    int    orderPosition = -1;   // index into ModulePatternData::getOrder(), -1 unknown
+    double rowSeconds    = 0.0;  // current row length (glide speed), 0 unknown
+
+    bool isValid() const { return pattern >= 0 && row >= 0; }
+};
+
 class ModulePatternData
 {
 public:
@@ -64,9 +80,55 @@ public:
 
     juce::String getTitle() const { return title; }
 
+    // Song order: pattern index per position, or kOrderSkip for a skipped
+    // entry ("+++", or an .xtp entry that names no pattern) and kOrderEnd for
+    // an end-of-song marker ("---").
+    static constexpr int kOrderSkip = -1;
+    static constexpr int kOrderEnd  = -2;
+    const std::vector<int>& getOrder() const { return order; }
+
+    // Where each order position starts, in seconds from the start of the song
+    // (parallel to getOrder()); -1 for positions playback never reaches, and
+    // empty when the format can't tell (.xtp). Used to skip by pattern.
+    const std::vector<double>& getOrderStartTimes() const { return orderStartTimes; }
+
+    // The module's instrument list -- or its sample list, for formats without
+    // instruments -- as the numbers pattern cells use. Tracker musicians have
+    // long hidden greetings and credits in these names.
+    struct NamedSlot { int number; juce::String name; };
+    const std::vector<NamedSlot>& getInstrumentNames() const { return instrumentNames; }
+    bool namesAreSamples() const { return instrumentNamesAreSamples; }
+
+    // The pattern cell's instrument column ("01", "--") as the number used in
+    // getInstrumentNames(); 0 for none. (libopenmpt prints these in hex,
+    // .xtp songs in decimal.)
+    int parseInstrumentNumber(const juce::String& inst) const
+    {
+        if (inst.isEmpty() || inst.containsOnly("-")) return 0;
+        return instrumentsInDecimal ? inst.getIntValue() : inst.getHexValue32();
+    }
+
+    // The other way round: an instrument number as pattern cells print it.
+    juce::String formatInstrumentNumber(int number) const
+    {
+        return instrumentsInDecimal ? juce::String(number).paddedLeft('0', 2)
+                                    : juce::String::toHexString(number).toUpperCase().paddedLeft('0', 2);
+    }
+
+    // The song message (often ASCII art, credits or greetings) and the
+    // artist, when the file has them.
+    juce::String getMessage() const { return message; }
+    juce::String getArtist()  const { return artist; }
+
 private:
     bool         loaded      = false;
     int          numChannels = 0;
     juce::String title;
     std::vector<ModulePattern> patterns;
+    std::vector<int> order;
+    std::vector<double> orderStartTimes;
+    std::vector<NamedSlot> instrumentNames;
+    bool instrumentNamesAreSamples = false;
+    bool instrumentsInDecimal = false;
+    juce::String message, artist;
 };

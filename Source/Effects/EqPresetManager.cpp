@@ -1,4 +1,5 @@
 #include "EqPresetManager.h"
+#include "../Util/AppDataDirectory.h"
 
 EqPresetManager::EqPresetManager()
 {
@@ -52,8 +53,7 @@ bool EqPresetManager::deletePreset(const juce::String& name)
 
 juce::File EqPresetManager::getPresetsFile() const
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-               .getChildFile("SoundPlayer2")
+    return getAppDataDirectory()
                .getChildFile("eq_presets.xml");
 }
 

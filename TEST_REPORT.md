@@ -1,16 +1,16 @@
 #!/bin/bash
-# SoundPlayer2 Feature Test Report - May 11, 2026
+# exPlayer Feature Test Report - May 11, 2026
 
 cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                  SoundPlayer2 Feature Test Report                            ║
+║                  exPlayer Feature Test Report                            ║
 ║                              May 11, 2026                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 PROJECT OVERVIEW
 ─────────────────────────────────────────────────────────────────────────────
 
-Name:       SoundPlayer2
+Name:       exPlayer
 Version:    1.3.0
 Type:       JUCE-based Audio Player
 Status:     ✅ All core features operational
@@ -33,8 +33,8 @@ Key Dependencies:
 EXECUTABLE ARTIFACTS
 ─────────────────────────────────────────────────────────────────────────────
 
-  Main Application:  /build/SoundPlayer2_artefacts/SoundPlayer2
-  Test Suite:        /build/SoundPlayer2Tests
+  Main Application:  /build/exPlayer_artefacts/exPlayer
+  Test Suite:        /build/exPlayerTests
 
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -232,7 +232,7 @@ Recommended Actions:
 
 Build & Run:
   Build:  cmake --build /path/to/build --config Release
-  Run:    /path/to/build/SoundPlayer2_artefacts/SoundPlayer2
-  Test:   /path/to/build/SoundPlayer2Tests
+  Run:    /path/to/build/exPlayer_artefacts/exPlayer
+  Test:   /path/to/build/exPlayerTests
 
 EOF

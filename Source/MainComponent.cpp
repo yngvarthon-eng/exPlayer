@@ -113,6 +113,7 @@ void MainComponent::connectPanelRequests()
     // Transport: the record menu's two video-export entries.
     playerControls->onRequestVideoExport         = [this] { showExportVideoDialog(); };
     playerControls->onRequestPlaylistVideoExport = [this] { showExportPlaylistVideoDialog(); };
+    playerControls->onRequestMicRecorder         = [this] { showMicRecorder(); };
 
     // The 30-band equalizer view needs more room than the 10-band one.
     equalizerUI->onExpandedChanged = [this] { resized(); };
@@ -303,12 +304,38 @@ void MainComponent::addFilesAndSelectFirstNew (const juce::Array<juce::File>& fi
 
 void MainComponent::showExportVideoDialog()
 {
-    videoExport->showExportDialog();
+    // Export what the user highlighted in the playlist, so a track can be
+    // exported without playing it first. A collapsed playlist hides the
+    // highlight, so fall back to the current track then.
+    videoExport->showExportDialog (playlistEditor->isVisible() ? playlistEditor->getSelectedRow() : -1);
 }
 
 void MainComponent::showExportPlaylistVideoDialog()
 {
     playlistVideoExport->showExportDialog();
+}
+
+void MainComponent::showMicRecorder()
+{
+    if (micRecorderWindow != nullptr)
+    {
+        micRecorderWindow->toFront (true);
+        return;
+    }
+
+    micRecorderWindow = std::make_unique<MicRecorderWindow> (
+        *audioEngine,
+        [this] (const juce::File& file) { addFilesAndSelectFirstNew ({ file }, true); },
+        [this]
+        {
+            // Called from inside the window's own close handling, so defer
+            // the delete until that call stack has unwound.
+            juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<MainComponent> (this)]
+            {
+                if (safeThis != nullptr)
+                    safeThis->micRecorderWindow.reset();
+            });
+        });
 }
 
 // ==============================================================================
@@ -376,9 +403,8 @@ void MainComponent::timerCallback()
 {
     if (patternViewer->isVisible())
     {
-        int patIdx = audioEngine->getCurrentPatternIndex();
-        int row    = audioEngine->getCurrentPatternRow();
-        patternViewer->setPlaybackPosition (patIdx, row);
+        patternViewer->setPlaybackPosition (audioEngine->getPatternPlayPosition(),
+                                            audioEngine->isPlaying());
     }
 
     // Both exporters poll rather than call back -- see their controllers for why.

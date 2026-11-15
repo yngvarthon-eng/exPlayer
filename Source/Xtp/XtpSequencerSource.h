@@ -49,20 +49,30 @@ public:
     // Live playback position for AudioEngine's UI poll. -1 if not yet dispatched.
     int getCurrentRow() const { return currentRowForUi.load(); }
     int getCurrentPatternIndex() const { return currentPatternForUi.load(); }
+    int getCurrentOrderPosition() const { return currentOrderForUi.load(); }
+    // How far into the current row rendering has got, 0..1, ticks plus the
+    // time into the current tick.
+    double getCurrentRowFraction() const { return rowFractionForUi.load(); }
+    // Length of the current row in seconds at the current tempo.
+    double getCurrentRowSeconds() const { return rowSecondsForUi.load(); }
 
 private:
-    // xtp::NoteSink -- resolves (instrument, sample) to a voice using the same
-    // priority order as exTracker's PluginHost::triggerNoteOnResolved.
+    // xtp::NoteSink -- resolves (instrument, sample) to a voice. Current
+    // exTracker plays only the note's instrument; the sample-column and
+    // same-numbered-bank fallbacks reproduce what its load-time migration
+    // (migrateSampleReferences) does for older songs.
     void noteOn(std::uint8_t instrument, std::uint16_t sample, int midiNote,
                std::uint8_t velocity, bool retrigger) override;
     void noteOff(std::uint8_t instrument, std::uint16_t sample, int midiNote) override;
 
     xtp::InstrumentVoice* resolveVoice(std::uint8_t instrument, std::uint16_t sample);
+    int offsetNote(std::uint8_t instrument, std::uint16_t sample, int midiNote) const;
     void buildInstrumentVoices();
     void seekToSampleZero();
     void advanceOneTick();
     void advanceSongOrder();
     void renderChunk(int destOffset, int numSamples);
+    void publishRowFraction();
 
     xtp::Song song;
     juce::String loadError;
@@ -74,7 +84,8 @@ private:
     xtp::TransportClock transport;
     xtp::Sequencer sequencer;
 
-    std::array<std::unique_ptr<xtp::InstrumentVoice>, 16> instrumentVoices;
+    std::array<std::unique_ptr<xtp::InstrumentVoice>, xtp::Song::kInstrumentSlots> instrumentVoices;
+    std::array<int, xtp::Song::kInstrumentSlots> instrumentNoteOffset {}; // rounded INSTRUMENT_PITCH
     std::map<int, std::unique_ptr<xtp::InstrumentVoice>> sampleVoices;
 
     int songOrderPosition = 0;
@@ -86,6 +97,9 @@ private:
 
     std::atomic<int> currentRowForUi { -1 };
     std::atomic<int> currentPatternForUi { -1 };
+    std::atomic<int> currentOrderForUi { -1 };
+    std::atomic<double> rowFractionForUi { 0.0 };
+    std::atomic<double> rowSecondsForUi { 0.0 };
 
     std::vector<float> monoScratch;
     std::vector<float> voiceScratch;

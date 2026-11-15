@@ -77,6 +77,14 @@ void VisualizationComponent::drawTabs(juce::Graphics& g) const
                          (float)tabBar.getX(), (float)tabBar.getRight());
 }
 
+void VisualizationComponent::setAnimationSuspended(bool suspended)
+{
+    if (suspended)
+        stopTimer();
+    else if (! isTimerRunning())
+        startTimer(40);
+}
+
 void VisualizationComponent::timerCallback()
 {
     if (!audioEngine->tryLockAudioBuffer())
